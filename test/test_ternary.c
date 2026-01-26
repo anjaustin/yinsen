@@ -279,6 +279,131 @@ void test_sparsity(void) {
     dense[0] = trit_pack4(1, -1, 1, -1);
     int nnz_dense = ternary_count_nonzero(dense, 4);
     TEST(nnz_dense == 4, "Dense count = 4");
+    
+    /* Test full stats */
+    TernaryStats stats;
+    ternary_stats(sparse, 8, &stats);
+    TEST(stats.positive == 2, "Stats: 2 positive");
+    TEST(stats.negative == 1, "Stats: 1 negative");
+    TEST(stats.zeros == 5, "Stats: 5 zeros");
+    TEST(FLOAT_EQ(stats.sparsity, 5.0f/8.0f, 1e-6f), "Sparsity = 62.5%");
+}
+
+/* ============================================================================
+ * ABSMEAN QUANTIZATION TEST (BitNet b1.58 method)
+ * ============================================================================ */
+
+void test_absmean_quantize(void) {
+    printf("\n=== Absmean Quantization (BitNet b1.58) ===\n");
+    
+    /* Test case: weights with known distribution */
+    float weights[8] = {1.0f, -1.0f, 0.5f, -0.5f, 0.2f, -0.2f, 0.0f, 0.8f};
+    /* absmean = (1 + 1 + 0.5 + 0.5 + 0.2 + 0.2 + 0 + 0.8) / 8 = 4.2 / 8 = 0.525 */
+    
+    float gamma = ternary_absmean_scale(weights, 8);
+    TEST(FLOAT_EQ(gamma, 0.525f, 0.001f), "Absmean scale = 0.525");
+    
+    uint8_t packed[2];
+    ternary_quantize_absmean(weights, packed, 8);
+    
+    /* Expected after scaling by 1/0.525:
+     * 1.0 / 0.525 = 1.90 -> round to 1, clip to 1 -> +1
+     * -1.0 / 0.525 = -1.90 -> round to -2, clip to -1 -> -1
+     * 0.5 / 0.525 = 0.95 -> round to 1 -> +1
+     * -0.5 / 0.525 = -0.95 -> round to -1 -> -1
+     * 0.2 / 0.525 = 0.38 -> round to 0 -> 0
+     * -0.2 / 0.525 = -0.38 -> round to 0 -> 0
+     * 0.0 -> 0
+     * 0.8 / 0.525 = 1.52 -> round to 2, clip to 1 -> +1
+     */
+    TEST(trit_unpack(packed[0], 0) == 1, "absmean: 1.0 -> +1");
+    TEST(trit_unpack(packed[0], 1) == -1, "absmean: -1.0 -> -1");
+    TEST(trit_unpack(packed[0], 2) == 1, "absmean: 0.5 -> +1");
+    TEST(trit_unpack(packed[0], 3) == -1, "absmean: -0.5 -> -1");
+    TEST(trit_unpack(packed[1], 0) == 0, "absmean: 0.2 -> 0");
+    TEST(trit_unpack(packed[1], 1) == 0, "absmean: -0.2 -> 0");
+    TEST(trit_unpack(packed[1], 2) == 0, "absmean: 0.0 -> 0");
+    TEST(trit_unpack(packed[1], 3) == 1, "absmean: 0.8 -> +1");
+}
+
+/* ============================================================================
+ * INT8 ACTIVATION QUANTIZATION TEST
+ * ============================================================================ */
+
+void test_int8_quantize(void) {
+    printf("\n=== Int8 Activation Quantization ===\n");
+    
+    float x[4] = {1.0f, -0.5f, 0.25f, -1.0f};
+    int8_t x_q[4];
+    TernaryQuantParams params;
+    
+    ternary_quantize_activations(x, x_q, 4, &params);
+    
+    /* absmax = 1.0, scale = 1.0/127 */
+    TEST(FLOAT_EQ(params.scale, 1.0f/127.0f, 1e-6f), "Scale = 1/127");
+    TEST(x_q[0] == 127, "1.0 -> 127");
+    TEST(x_q[1] == -64 || x_q[1] == -63, "-0.5 -> ~-64");  /* rounding */
+    TEST(x_q[3] == -127, "-1.0 -> -127");
+    
+    /* Test dequantization roundtrip */
+    float x_recovered[4];
+    ternary_dequantize_activations(x_q, x_recovered, 4, &params);
+    
+    TEST(FLOAT_EQ(x_recovered[0], 1.0f, 0.01f), "Dequant 1.0 roundtrip");
+    TEST(FLOAT_EQ(x_recovered[3], -1.0f, 0.01f), "Dequant -1.0 roundtrip");
+}
+
+/* ============================================================================
+ * INTEGER TERNARY DOT PRODUCT TEST
+ * ============================================================================ */
+
+void test_int8_dot(void) {
+    printf("\n=== Integer Ternary Dot Product ===\n");
+    
+    /* Compare float and int8 paths */
+    uint8_t w = trit_pack4(1, -1, 0, 1);
+    float x[4] = {1.0f, 2.0f, 3.0f, 4.0f};
+    
+    /* Float path */
+    float result_float = ternary_dot(&w, x, 4);
+    
+    /* Int8 path */
+    int8_t x_q[4];
+    TernaryQuantParams params;
+    ternary_quantize_activations(x, x_q, 4, &params);
+    int32_t result_int = ternary_dot_int8(&w, x_q, 4);
+    float result_int_dequant = (float)result_int * params.scale;
+    
+    /* Should be close (within quantization error) */
+    TEST(FLOAT_EQ(result_float, result_int_dequant, 0.1f), 
+         "Int8 dot matches float within quant error");
+    
+    printf("  Float result: %.4f\n", result_float);
+    printf("  Int8 result:  %.4f (int32: %d)\n", result_int_dequant, result_int);
+}
+
+/* ============================================================================
+ * ENERGY ESTIMATION TEST
+ * ============================================================================ */
+
+void test_energy_estimation(void) {
+    printf("\n=== Energy Estimation ===\n");
+    
+    float ternary_energy = ternary_matvec_energy_pj(100, 100);
+    float float_energy = float_matvec_energy_pj(100, 100);
+    float ratio = ternary_energy_savings_ratio(100, 100);
+    
+    /* Ternary: 10000 * 0.03 = 300 pJ */
+    /* Float: 10000 * (0.9 + 0.4) = 13000 pJ */
+    /* Ratio: 13000 / 300 = 43.3x */
+    
+    TEST(FLOAT_EQ(ternary_energy, 300.0f, 1.0f), "Ternary 100x100 = 300 pJ");
+    TEST(FLOAT_EQ(float_energy, 13000.0f, 100.0f), "Float 100x100 = 13000 pJ");
+    TEST(ratio > 40.0f && ratio < 50.0f, "Energy savings ~43x");
+    
+    printf("  Ternary energy: %.1f pJ\n", ternary_energy);
+    printf("  Float energy:   %.1f pJ\n", float_energy);
+    printf("  Savings ratio:  %.1fx\n", ratio);
 }
 
 /* ============================================================================
@@ -298,6 +423,10 @@ int main(void) {
     test_compression();
     test_exhaustive_2x2();
     test_sparsity();
+    test_absmean_quantize();
+    test_int8_quantize();
+    test_int8_dot();
+    test_energy_estimation();
 
     printf("\n===================================================\n");
     printf("  RESULTS: %d/%d passed\n", tests_passed, tests_run);

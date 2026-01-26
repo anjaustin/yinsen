@@ -1,20 +1,24 @@
 /*
- * YINSEN Ternary - Three-Valued Weight Computation
+ * YINSEN Ternary - 1.58-bit Weight Computation
  *
- * Weights are {-1, 0, +1}, not floating point.
+ * Weights are {-1, 0, +1}, requiring log2(3) = 1.58 bits per weight.
  * Matmul becomes add/subtract - no multiplication needed.
  *
  * Benefits:
  *   - Deterministic: integer arithmetic, no float variance
- *   - Tiny: 2 bits per weight (vs 32 for float)
+ *   - Tiny: 2 bits per weight storage (vs 32 for float)
  *   - Fast: add/subtract only, no multiply
  *   - Hardware-friendly: works on anything with an ALU
+ *   - Auditable: every weight is inspectable as -1, 0, or +1
  *
  * Encoding (2 bits per trit):
- *   00 = 0  (skip)
+ *   00 = 0  (skip - explicit feature filtering)
  *   01 = +1 (add)
  *   11 = -1 (subtract)
  *   10 = reserved
+ *
+ * Note: Zero is not "missing" - it's explicit "ignore this input".
+ * This enables feature filtering (BitNet b1.58 insight).
  *
  * Verification status: See test_ternary.c
  */
@@ -24,6 +28,7 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#include <math.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -169,7 +174,7 @@ static inline size_t ternary_matrix_bytes(int M, int N) {
 }
 
 /*
- * Pack float weights to ternary.
+ * Pack float weights to ternary using threshold.
  *
  * Quantization: val > threshold  -> +1
  *               val < -threshold -> -1
@@ -205,6 +210,66 @@ static inline void ternary_quantize(
 }
 
 /*
+ * Pack float weights to ternary using absmean quantization.
+ * (BitNet b1.58 method)
+ *
+ * Algorithm:
+ *   1. Compute γ = mean(|W|)
+ *   2. Scale: W_scaled = W / γ
+ *   3. Round to nearest in {-1, 0, +1}
+ *
+ * This adapts to the weight distribution automatically.
+ */
+static inline void ternary_quantize_absmean(
+    const float* weights,
+    uint8_t* packed,
+    int n
+) {
+    /* Step 1: Compute absmean (γ) */
+    float sum = 0.0f;
+    for (int i = 0; i < n; i++) {
+        sum += fabsf(weights[i]);
+    }
+    float gamma = sum / (float)n;
+    float eps = 1e-8f;
+    
+    /* Step 2: Quantize using RoundClip(W/γ, -1, 1) */
+    int byte_idx = 0;
+    uint8_t current_byte = 0;
+    
+    for (int i = 0; i < n; i++) {
+        float scaled = weights[i] / (gamma + eps);
+        
+        /* Round to nearest integer, clip to [-1, 1] */
+        int rounded = (int)roundf(scaled);
+        if (rounded > 1) rounded = 1;
+        if (rounded < -1) rounded = -1;
+        
+        int8_t trit = (int8_t)rounded;
+        
+        int bit_pos = i % 4;
+        current_byte |= (trit_encode(trit) << (bit_pos * 2));
+        
+        if (bit_pos == 3 || i == n - 1) {
+            packed[byte_idx++] = current_byte;
+            current_byte = 0;
+        }
+    }
+}
+
+/*
+ * Get the absmean scale factor for a weight array.
+ * Useful for dequantization or debugging.
+ */
+static inline float ternary_absmean_scale(const float* weights, int n) {
+    float sum = 0.0f;
+    for (int i = 0; i < n; i++) {
+        sum += fabsf(weights[i]);
+    }
+    return sum / (float)n;
+}
+
+/*
  * Unpack ternary weights to float (-1.0, 0.0, +1.0)
  */
 static inline void ternary_unpack_to_float(
@@ -227,10 +292,169 @@ static inline void ternary_unpack_to_float(
 }
 
 /* ============================================================================
+ * INT8 ACTIVATION QUANTIZATION
+ *
+ * For fully integer forward pass (except nonlinearities).
+ * Based on BitNet b1.58's activation handling.
+ * ============================================================================ */
+
+typedef struct {
+    float scale;       /* Multiply int result by this to get float */
+    int8_t zero_point; /* Always 0 for symmetric quantization */
+} TernaryQuantParams;
+
+/*
+ * Quantize float activations to int8 (symmetric, per-tensor).
+ * Range: [-127, 127]
+ */
+static inline void ternary_quantize_activations(
+    const float* x,
+    int8_t* x_q,
+    int n,
+    TernaryQuantParams* params
+) {
+    /* Find absmax */
+    float absmax = 0.0f;
+    for (int i = 0; i < n; i++) {
+        float abs_val = fabsf(x[i]);
+        if (abs_val > absmax) absmax = abs_val;
+    }
+    
+    /* Compute scale */
+    params->scale = absmax / 127.0f;
+    params->zero_point = 0;
+    
+    /* Quantize */
+    if (absmax < 1e-8f) {
+        /* All zeros */
+        for (int i = 0; i < n; i++) {
+            x_q[i] = 0;
+        }
+    } else {
+        for (int i = 0; i < n; i++) {
+            float scaled = x[i] / params->scale;
+            int rounded = (int)roundf(scaled);
+            if (rounded > 127) rounded = 127;
+            if (rounded < -127) rounded = -127;
+            x_q[i] = (int8_t)rounded;
+        }
+    }
+}
+
+/*
+ * Dequantize int8 back to float.
+ */
+static inline void ternary_dequantize_activations(
+    const int8_t* x_q,
+    float* x,
+    int n,
+    const TernaryQuantParams* params
+) {
+    for (int i = 0; i < n; i++) {
+        x[i] = (float)x_q[i] * params->scale;
+    }
+}
+
+/*
+ * Integer ternary dot product.
+ *
+ * w: packed trit weights
+ * x_q: quantized int8 activations
+ * n: vector length
+ *
+ * Returns: int32 accumulator (multiply by scale later)
+ *
+ * This is the core BitNet insight: matmul becomes integer add/subtract.
+ */
+static inline int32_t ternary_dot_int8(
+    const uint8_t* w_packed,
+    const int8_t* x_q,
+    int n
+) {
+    int32_t sum = 0;
+    int byte_idx = 0;
+    int bit_pos = 0;
+    
+    for (int i = 0; i < n; i++) {
+        int8_t trit = trit_unpack(w_packed[byte_idx], bit_pos);
+        
+        if (trit > 0) {
+            sum += x_q[i];
+        } else if (trit < 0) {
+            sum -= x_q[i];
+        }
+        /* trit == 0: skip (sparse) */
+        
+        bit_pos++;
+        if (bit_pos == 4) {
+            bit_pos = 0;
+            byte_idx++;
+        }
+    }
+    
+    return sum;
+}
+
+/*
+ * Integer ternary matvec: y_int = W @ x_q
+ * Output is int32, needs dequantization.
+ */
+static inline void ternary_matvec_int8(
+    const uint8_t* W_packed,
+    const int8_t* x_q,
+    int32_t* y_int,
+    int M,
+    int N
+) {
+    int bytes_per_row = (N + 3) / 4;
+    
+    for (int i = 0; i < M; i++) {
+        y_int[i] = ternary_dot_int8(W_packed + i * bytes_per_row, x_q, N);
+    }
+}
+
+/* ============================================================================
+ * ENERGY ESTIMATION
+ *
+ * Based on Horowitz (2014) energy model for 7nm process.
+ * INT8 ADD: ~0.03 pJ
+ * FP16 MUL: ~0.9 pJ
+ * FP16 ADD: ~0.4 pJ
+ * ============================================================================ */
+
+#define YINSEN_ENERGY_INT8_ADD_PJ   0.03f
+#define YINSEN_ENERGY_FP16_MUL_PJ   0.9f
+#define YINSEN_ENERGY_FP16_ADD_PJ   0.4f
+
+/*
+ * Estimate energy for ternary matvec (integer path).
+ * Assumes all ops are int8 adds (conservative).
+ */
+static inline float ternary_matvec_energy_pj(int M, int N) {
+    /* N additions per row, M rows */
+    return (float)(M * N) * YINSEN_ENERGY_INT8_ADD_PJ;
+}
+
+/*
+ * Estimate energy for float matvec (standard path).
+ * Each element: 1 mul + 1 add.
+ */
+static inline float float_matvec_energy_pj(int M, int N) {
+    return (float)(M * N) * (YINSEN_ENERGY_FP16_MUL_PJ + YINSEN_ENERGY_FP16_ADD_PJ);
+}
+
+/*
+ * Energy savings ratio: float / ternary
+ */
+static inline float ternary_energy_savings_ratio(int M, int N) {
+    return float_matvec_energy_pj(M, N) / ternary_matvec_energy_pj(M, N);
+}
+
+/* ============================================================================
  * STATISTICS
  * ============================================================================ */
 
-/* Count non-zero trits (sparsity measure) */
+/* Count non-zero trits (density measure) */
 static inline int ternary_count_nonzero(const uint8_t* packed, int n) {
     int count = 0;
     int byte_idx = 0;
@@ -248,6 +472,73 @@ static inline int ternary_count_nonzero(const uint8_t* packed, int n) {
     }
 
     return count;
+}
+
+/* Count zeros (sparsity measure - zeros are explicit "ignore" signals) */
+static inline int ternary_count_zeros(const uint8_t* packed, int n) {
+    return n - ternary_count_nonzero(packed, n);
+}
+
+/* Sparsity ratio: fraction of weights that are zero */
+static inline float ternary_sparsity(const uint8_t* packed, int n) {
+    return (float)ternary_count_zeros(packed, n) / (float)n;
+}
+
+/* Count positive weights */
+static inline int ternary_count_positive(const uint8_t* packed, int n) {
+    int count = 0;
+    int byte_idx = 0;
+    int bit_pos = 0;
+
+    for (int i = 0; i < n; i++) {
+        int8_t trit = trit_unpack(packed[byte_idx], bit_pos);
+        if (trit > 0) count++;
+
+        bit_pos++;
+        if (bit_pos == 4) {
+            bit_pos = 0;
+            byte_idx++;
+        }
+    }
+
+    return count;
+}
+
+/* Count negative weights */
+static inline int ternary_count_negative(const uint8_t* packed, int n) {
+    int count = 0;
+    int byte_idx = 0;
+    int bit_pos = 0;
+
+    for (int i = 0; i < n; i++) {
+        int8_t trit = trit_unpack(packed[byte_idx], bit_pos);
+        if (trit < 0) count++;
+
+        bit_pos++;
+        if (bit_pos == 4) {
+            bit_pos = 0;
+            byte_idx++;
+        }
+    }
+
+    return count;
+}
+
+/* Full weight distribution statistics */
+typedef struct {
+    int total;
+    int positive;     /* Count of +1 */
+    int negative;     /* Count of -1 */
+    int zeros;        /* Count of 0 */
+    float sparsity;   /* zeros / total */
+} TernaryStats;
+
+static inline void ternary_stats(const uint8_t* packed, int n, TernaryStats* stats) {
+    stats->total = n;
+    stats->positive = ternary_count_positive(packed, n);
+    stats->negative = ternary_count_negative(packed, n);
+    stats->zeros = n - stats->positive - stats->negative;
+    stats->sparsity = (float)stats->zeros / (float)n;
 }
 
 /* Memory comparison: ternary vs float */
