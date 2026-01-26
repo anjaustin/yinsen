@@ -1,0 +1,48 @@
+# YINSEN Makefile
+#
+# Build verified frozen computation code.
+
+CC = gcc
+CFLAGS = -Wall -Wextra -O2 -std=c11 -I./include
+LDFLAGS = -lm
+
+# Directories
+BUILD_DIR = build
+TEST_DIR = test
+EXAMPLES_DIR = examples
+
+# Targets
+.PHONY: all clean test examples
+
+all: test examples
+
+# Create build directory
+$(BUILD_DIR):
+	mkdir -p $(BUILD_DIR)
+
+# Tests
+test: $(BUILD_DIR) $(BUILD_DIR)/test_shapes $(BUILD_DIR)/test_cfc
+	@echo "Running tests..."
+	@$(BUILD_DIR)/test_shapes
+	@$(BUILD_DIR)/test_cfc
+
+$(BUILD_DIR)/test_shapes: $(TEST_DIR)/test_shapes.c include/apu.h include/onnx_shapes.h
+	$(CC) $(CFLAGS) -o $@ $< $(LDFLAGS)
+
+$(BUILD_DIR)/test_cfc: $(TEST_DIR)/test_cfc.c include/cfc.h include/onnx_shapes.h
+	$(CC) $(CFLAGS) -o $@ $< $(LDFLAGS)
+
+# Examples
+examples: $(BUILD_DIR) $(BUILD_DIR)/hello_xor
+
+$(BUILD_DIR)/hello_xor: $(EXAMPLES_DIR)/hello_xor.c include/apu.h
+	$(CC) $(CFLAGS) -o $@ $< $(LDFLAGS)
+
+# Clean
+clean:
+	rm -rf $(BUILD_DIR)
+
+# Run all
+run: test
+	@echo "\nRunning examples..."
+	@$(BUILD_DIR)/hello_xor
