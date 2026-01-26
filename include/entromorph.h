@@ -4,14 +4,28 @@
  * Provides genome representation, mutation, and export for CfC networks.
  * Intended for evolutionary optimization instead of backpropagation.
  *
- * Verification status: TESTED
- *   - RNG deterministic with same seed
- *   - Genesis produces valid genomes
- *   - Mutation modifies weights
- *   - XOR convergence: 5/5 runs succeed (typical: 10-30 generations)
- *   - Tournament selection + elitism works
+ * Verification status: PARTIALLY TESTED, CRITICAL ISSUES
  *
- * Test file: test/test_entromorph.c (11 tests)
+ * Components that work:
+ *   - RNG deterministic with same seed
+ *   - Genesis produces valid genomes (structurally)
+ *   - Mutation modifies weights
+ *   - Genome export produces valid C headers
+ *
+ * CRITICAL ISSUES (see docs/FALSIFICATION_ENTROMORPH.md):
+ *   - Evolution "converges" but solutions have 0% confidence margin
+ *   - Genesis produces all-0.5 predictions (cannot escape this basin)
+ *   - Cross-entropy fitness REWARDS staying near 0.5 (wrong incentive)
+ *   - 1M random genomes: 0 had meaningful confidence
+ *   - Solutions fragile to 1% input noise (88% accuracy)
+ *
+ * This code runs but DOES NOT produce useful learned networks.
+ * Requires: different initialization, different fitness function.
+ *
+ * Test files:
+ *   - test/test_entromorph.c (11 tests - component tests PASS)
+ *   - test/test_entromorph_falsify.c (identifies the problem)
+ *   - test/test_entromorph_diagnosis.c (root cause analysis)
  */
 
 #ifndef YINSEN_ENTROMORPH_H

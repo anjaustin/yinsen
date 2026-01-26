@@ -111,6 +111,8 @@ This document tracks every claim made in the yinsen repository and its verificat
 
 ## EntroMorph (entromorph.h)
 
+### Component Tests (PASS)
+
 | Claim | Level | Evidence |
 |-------|-------|----------|
 | RNG is deterministic with same seed | **TESTED** | test_rng_deterministic() |
@@ -120,10 +122,25 @@ This document tracks every claim made in the yinsen repository and its verificat
 | Genesis tau in [0.01, 100] | **TESTED** | test_genesis_tau_range() |
 | Mutation changes weights | **TESTED** | test_mutation_changes_weights() |
 | Genome to CfC params works | **TESTED** | test_genome_to_params() |
-| Evolution converges on XOR | **TESTED** | 5/5 runs converge, typical 10-30 gens |
 | Genome export produces valid C | **TESTED** | test_export_header() |
-| Mutation rates are appropriate | **TESTED** | XOR convergence demonstrates viability |
-| Evolution scales to larger tasks | **UNTESTED** | Only XOR tested |
+
+### Evolution Convergence (FALSIFIED)
+
+| Claim | Level | Evidence |
+|-------|-------|----------|
+| Evolution converges on XOR | **MISLEADING** | 100/100 converge but 0/100 have >10% confidence |
+| Solutions are useful | **FALSE** | Solutions fragile to 1% noise (88% accuracy) |
+| Evolution actually learns | **FALSE** | Solutions cluster at 0.5, don't escape |
+| Mutation rates are appropriate | **UNKNOWN** | Can't evaluate without working fitness |
+
+### Root Cause (see docs/FALSIFICATION_ENTROMORPH.md)
+
+| Finding | Implication |
+|---------|-------------|
+| Genesis produces neutral networks | All predictions ≈ 0.5 |
+| Cross-entropy rewards staying near 0.5 | No gradient toward confident solutions |
+| 1M random genomes: 0 confident | Initialization fundamentally broken |
+| Random solutions have BETTER fitness than confident ones | Fitness function is wrong |
 
 ## Cross-Cutting Claims
 
@@ -150,6 +167,7 @@ This document tracks every claim made in the yinsen repository and its verificat
 
 ## Changelog
 
+- 2026-01-26: **EntroMorph FALSIFIED** - convergence is misleading, solutions have 0% confidence
 - 2026-01-26: EntroMorph TESTED - evolution converges on XOR (5/5 runs)
 - 2026-01-26: Added falsification test results and edge case documentation
 - 2026-01-26: Added BitNet b1.58 features (absmean, int8, energy estimation)

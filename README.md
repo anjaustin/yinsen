@@ -15,14 +15,20 @@ A research library exploring exhaustively-tested, dependency-free neural network
 
 Ternary weights eliminate floating-point multiplication in the forward pass. A dot product becomes counting and subtraction. This isn't just an optimization—it's a different computational model that enables exhaustive verification.
 
-## Current Status: Evolution Works
+## Current Status: Primitives Work, Evolution Broken
 
-Yinsen has verified primitives AND proven evolution convergence. It does not yet have:
-- A trained ternary network solving a real task (evolution uses float CfC)
-- Cross-platform determinism testing (only darwin/arm64)
-- Certification artifacts
+Yinsen has verified primitives but **evolution is fundamentally broken**.
 
-**NEW:** EntroMorph evolution converges on XOR - 5/5 runs succeed in 10-30 generations.
+**What works:**
+- Logic gates, arithmetic, activations - all verified
+- CfC cell mechanics - deterministic, stable
+- Ternary weights - compression, dot product
+
+**What's broken (see docs/FALSIFICATION_ENTROMORPH.md):**
+- EntroMorph "converges" but solutions have **0% confidence margin**
+- All predictions cluster near 0.5 - evolution finds numerical coincidences, not learned functions
+- Cross-entropy fitness REWARDS staying near 0.5 (wrong incentive)
+- 1,000,000 random genomes: **zero** had meaningful confidence
 
 This is research code exploring whether neural computation can be made auditable. It is not production-ready.
 
@@ -41,14 +47,16 @@ This is research code exploring whether neural computation can be made auditable
 - CfC cell (determinism, stability over 10K iterations)
 - Ternary CfC cell (determinism, stability, 4.4x memory compression)
 
-### Evolution (newly tested!)
-- EntroMorph evolution converges on XOR (5/5 runs, 10-30 generations)
-- Tournament selection with elitism
-- Genome export to C header
+### Evolution (BROKEN - see docs/FALSIFICATION_ENTROMORPH.md)
+- EntroMorph "converges" but solutions are NOT learned
+- 100/100 runs "succeed" with 0% confidence margins
+- Solutions predict ~0.5 and happen to round correctly
+- Fragile to 1% noise (88% accuracy, should be 100%)
 
 ### Present but untested
 - Cross-platform determinism (only tested on darwin/arm64)
 - Ternary evolution (current evolution uses float CfC)
+- **Working evolution** (requires new fitness function, initialization)
 
 ## Quick Start
 
@@ -74,7 +82,7 @@ make examples
 | Ternary ops | Properties | **TESTED** | Pack/unpack, dot product |
 | CfC cell | Properties | **TESTED** | Single platform only |
 | Ternary CfC | Properties | **TESTED** | 4.4x compression measured |
-| EntroMorph | XOR convergence | **TESTED** | 5/5 runs converge |
+| EntroMorph | XOR convergence | **FALSIFIED** | Converges but 0% confidence |
 | Cross-platform | None | **UNTESTED** | Claimed, not verified |
 
 ## Project Structure
@@ -116,7 +124,7 @@ yinsen/
 #include "cfc_ternary.h"  // Ternary CfC networks
 #include "apu.h"          // Logic and arithmetic
 #include "onnx_shapes.h"  // Neural network ops
-#include "entromorph.h"   // Evolution (TESTED)
+#include "entromorph.h"   // Evolution (BROKEN - see falsification)
 ```
 
 ```bash
@@ -127,8 +135,9 @@ gcc -I./include -O2 -std=c11 your_code.c -lm
 
 ```
 ┌─────────────────────────────────────────┐
-│  EntroMorph (Evolution)     [TESTED]    │
-│  - Evolves CfC networks (XOR proven)    │
+│  EntroMorph (Evolution)     [BROKEN]    │
+│  - Converges but solutions meaningless  │
+│  - See docs/FALSIFICATION_ENTROMORPH.md │
 ├─────────────────────────────────────────┤
 │  CfC Ternary Cell           [TESTED]    │
 │  - Temporal dynamics with ternary W     │
@@ -153,7 +162,7 @@ This repo explores:
 
 2. **Can we achieve cross-platform determinism?** (Unknown: untested)
 
-3. **Can evolution produce useful networks?** (YES for float CfC on XOR; ternary evolution untested)
+3. **Can evolution produce useful networks?** (**NO** - current approach fundamentally broken)
 
 4. **What tasks can ternary CfC solve?** (Unknown: no end-to-end demo yet)
 
@@ -175,9 +184,9 @@ This repo explores:
 
 ## Roadmap
 
-- [x] **Test EntroMorph**: Evolution converges on XOR (float CfC)
-- [ ] **Ternary evolution**: Evolve ternary CfC networks
-- [ ] **Harder tasks**: Sequence prediction, anomaly detection
+- [x] **Test EntroMorph**: Completed - but found it's broken
+- [ ] **Fix EntroMorph**: Need different fitness function, initialization
+- [ ] **Ternary evolution**: Evolve ternary CfC networks  
 - [ ] **Cross-platform CI**: Test determinism on Linux/macOS/Windows, ARM/x86
 - [ ] **Benchmark ternary vs float**: Speed, accuracy, memory on same task
 - [ ] **WCET analysis**: For one platform, one network size

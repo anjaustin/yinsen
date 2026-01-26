@@ -8,12 +8,29 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### CRITICAL: EntroMorph Evolution FALSIFIED
+
+**The evolution engine does NOT work.** Falsification testing revealed:
+
+- 100/100 runs "converge" but 0/100 have >10% confidence margin
+- Solutions predict ~0.5 for all inputs (random chance determines correctness)
+- Cross-entropy fitness REWARDS staying near 0.5
+- 1,000,000 random genomes searched: ZERO had meaningful confidence
+- Solutions fragile to 1% noise (88% accuracy vs expected 100%)
+
+**Root cause:** Genesis initialization + cross-entropy fitness create a trap where evolution finds numerical coincidences, not learned functions.
+
+**See:** `docs/FALSIFICATION_ENTROMORPH.md` for full analysis.
+
 ### Added
 - **EntroMorph convergence tests** (`test/test_entromorph.c`)
   - 11 tests covering RNG, genesis, mutation, and XOR convergence
-  - **Critical result:** Evolution converges on XOR in 5/5 runs (typical: 10-30 generations)
-  - Tournament selection with elitism
-  - Genome export to C header
+  - Tests PASS but results are MISLEADING (see falsification)
+- **EntroMorph falsification tests**
+  - `test/test_entromorph_falsify.c` - 11 tests identifying the problem
+  - `test/test_entromorph_deep.c` - confidence analysis
+  - `test/test_entromorph_diagnosis.c` - root cause analysis
+  - `docs/FALSIFICATION_ENTROMORPH.md` - full report
 - **Absmean quantization** (`ternary_quantize_absmean`) - BitNet b1.58 method
   - Adapts to weight distribution automatically
   - `ternary_absmean_scale()` to get scale factor
@@ -39,11 +56,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Documentation now explains zero as "explicit feature filtering"
 
 ### Tests
-- **test_entromorph.c** - 11 tests for evolution engine
-  - RNG determinism and distribution
-  - Genesis and mutation
-  - XOR convergence (THE critical test)
-  - Genome export
+- **test_entromorph.c** - 11 tests for evolution engine (components work, convergence misleading)
+- **test_entromorph_falsify.c** - 11 falsification tests (exposed the problem)
+- **test_entromorph_deep.c** - confidence analysis (0/100 have >10% margin)
+- **test_entromorph_diagnosis.c** - root cause (genesis + fitness are wrong)
 - Added 23 new tests to test_ternary.c (55 total)
   - Absmean quantization tests
   - Int8 quantization roundtrip tests
