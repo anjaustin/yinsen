@@ -1,11 +1,13 @@
 /*
  * YINSEN APU - Arithmetic Processing Unit
  *
- * Core primitives for frozen computation.
- * Verified: Logic shapes produce exact truth tables for binary inputs.
+ * Logic gates as polynomials, exact for binary inputs {0, 1}.
+ * Full adder and ripple-carry adder built from logic primitives.
  *
- * The 5 Primes: ADD, MUL, EXP, MAX, CONST
- * Everything else is composition.
+ * Verification status:
+ *   - Logic gates: PROVEN (exhaustive truth tables)
+ *   - Full adder: PROVEN (8/8 combinations)
+ *   - 8-bit adder: PROVEN (65,536/65,536 combinations)
  */
 
 #ifndef YINSEN_APU_H

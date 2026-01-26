@@ -1,4 +1,4 @@
-# Theory: Frozen Computation
+# Theory: Mathematical Foundations
 
 This document explains the mathematical foundations of Yinsen.
 
@@ -17,6 +17,8 @@ Boolean logic gates can be expressed as polynomials that are **exact** for binar
 | NAND | ¬(a ∧ b) | `1 - a*b` | Derived from NOT(AND) |
 | NOR | ¬(a ∨ b) | `1 - a - b + a*b` | Derived from NOT(OR) |
 | XNOR | ¬(a ⊕ b) | `1 - a - b + 2*a*b` | Derived from NOT(XOR) |
+
+**Status: PROVEN** - Exhaustively tested, all truth tables verified.
 
 ### Why This Works
 
@@ -53,7 +55,7 @@ sum   = (a + b - 2ab) + c - 2(a + b - 2ab)c
 carry = ab + (a + b - 2ab)c - ab(a + b - 2ab)c
 ```
 
-This is exact for binary inputs and produces the correct truth table for all 8 input combinations.
+**Status: PROVEN** - All 8 input combinations verified.
 
 ### Ripple Carry Adder
 
@@ -65,45 +67,40 @@ for (int i = 0; i < 8; i++) {
 }
 ```
 
-**Verified:** All 65,536 combinations of 8-bit addition (256 × 256) produce correct results.
+**Status: PROVEN** - All 65,536 combinations (256 × 256) verified.
 
-## 3. The 5 Primes
+## 3. Primitive Operations (Hypothesis)
 
-All operations in Yinsen derive from five primitive operations:
+> **Note:** This section describes an organizational framework, not a proven theorem.
 
-| Prime | Symbol | Description |
-|-------|--------|-------------|
-| ADD | + | Addition |
-| MUL | × | Multiplication |
-| EXP | e^x | Exponential |
-| MAX | max(a,b) | Maximum (for ReLU) |
-| CONST | k | Constants (0, 1, -1, 2, etc.) |
+The operations in Yinsen can be categorized into primitives:
 
-### Derivations
+| Primitive | Symbol | Used For |
+|-----------|--------|----------|
+| ADD | + | Accumulation |
+| MUL | × | Scaling, gating |
+| EXP | e^x | Sigmoid, softmax |
+| MAX | max(a,b) | ReLU |
+| DIV | ÷ | Normalization (softmax, layer norm) |
+| CONST | k | Thresholds, coefficients |
 
-- **Logic gates**: ADD, MUL, CONST only
-- **Sigmoid**: `1 / (1 + exp(-x))` = ADD, MUL, EXP, CONST
-- **Tanh**: `(exp(x) - exp(-x)) / (exp(x) + exp(-x))` = ADD, MUL, EXP, CONST
-- **ReLU**: `max(0, x)` = MAX, CONST
-- **Softmax**: `exp(x_i) / sum(exp(x_j))` = ADD, MUL, EXP
+### Observations (Not Proofs)
 
-## 4. CfC: Closed-form Continuous-time Networks
+- Logic gates use only: ADD, MUL, CONST
+- Activations use: ADD, MUL, EXP, MAX, CONST
+- Normalization requires: DIV
 
-### The Problem with ODEs
+### Open Questions
 
-Traditional continuous-time neural networks require solving:
-```
-dh/dt = f(h, x, t)
-```
+- Is this set minimal? (Unknown - not proven)
+- Is this set complete for neural computation? (Unknown - not proven)
+- Is there a formal sense in which these are "primitive"? (No - this is organizational, not mathematical)
 
-This requires numerical integration (Euler, RK4, etc.), which is:
-- Iterative (many steps)
-- Approximate
-- Non-deterministic across platforms
+## 4. CfC: A Gated Recurrence with Time Constants
 
-### The CfC Solution
+### What CfC Is
 
-CfC networks have a closed-form solution:
+CfC (Closed-form Continuous-time) is a recurrent cell architecture from Hasani et al. (2022). Our implementation computes:
 
 ```
 h(t) = (1 - gate) * h_prev * decay + gate * candidate
@@ -114,41 +111,42 @@ Where:
 - `candidate = tanh(W_cand @ [x; h_prev] + b_cand)`
 - `decay = exp(-dt / tau)`
 
-### Why This Works
+### Relationship to Other Architectures
 
-The key insight is that with gated updates and exponential decay, the ODE:
-```
-dh/dt = -h/tau + gate * (candidate - h)
-```
+CfC resembles a GRU with an explicit time constant:
 
-Has an analytical solution that can be computed in one step regardless of `dt`.
+| Feature | GRU | CfC |
+|---------|-----|-----|
+| Gating | Yes | Yes |
+| Reset gate | Yes | No |
+| Time constant | No | Yes (tau) |
+| Variable dt | No | Yes |
 
-### Properties
+The key difference is that CfC incorporates `dt` explicitly, making it suitable for irregularly-sampled time series.
 
-1. **Deterministic**: Same inputs always produce same outputs
-2. **Arbitrary dt**: Works for any time step, not just small ones
-3. **No iteration**: Single forward pass, no solver loops
-4. **Composable**: Built from the 5 Primes
+### The "Closed-Form" Claim
 
-## 5. Frozen vs. Learned
+The literature describes CfC as a "closed-form solution" to a continuous-time ODE. In practice:
 
-### What is Frozen
+- Our implementation is a discrete update rule
+- It doesn't require an ODE solver
+- Whether this constitutes "solving an ODE in closed form" depends on interpretation
 
-- Mathematical operations (XOR = a + b - 2ab)
-- Activation functions (sigmoid, tanh, etc.)
-- The CfC update equation structure
+**Status: TESTED** - Determinism and stability verified on single platform. No comparison to ODE solvers. No benchmark against GRU.
 
-### What is Learned
+## 5. What's Verified vs. What's Claimed
 
-- Weight matrices (W_gate, W_cand, W_out)
-- Biases (b_gate, b_cand, b_out)
-- Time constants (tau)
-
-### The Philosophy
-
-> "The shapes are frozen. The routing is learned."
-
-The mathematical structure is immutable truth. Only the parameters (weights) that route signals through this structure are learned or evolved.
+| Claim | Status | Evidence |
+|-------|--------|----------|
+| Logic polynomials are exact for {0,1} | **PROVEN** | Exhaustive truth tables |
+| Full adder correct | **PROVEN** | 8/8 combinations |
+| 8-bit adder correct | **PROVEN** | 65,536/65,536 combinations |
+| Activations correct | **TESTED** | Property tests, single platform |
+| CfC is deterministic | **TESTED** | Same-machine repeatability |
+| CfC is stable | **TESTED** | 10K iterations without divergence |
+| Cross-platform determinism | **UNTESTED** | Claimed, not verified |
+| CfC equivalent to ODE solution | **UNTESTED** | No comparison performed |
+| Primitives are complete/minimal | **HYPOTHESIS** | Organizational, not mathematical |
 
 ## 6. Verification Approach
 
@@ -166,12 +164,11 @@ For continuous functions, we verify properties:
 - Softmax: outputs sum to 1, all positive
 - CfC: determinism, bounded outputs, proper decay
 
-### Numerical Stability
+### What We Don't Test
 
-We test edge cases:
-- Large inputs to softmax (should not overflow)
-- Many iterations of CfC (should not diverge)
-- Zero inputs (should produce reasonable outputs)
+- Cross-platform reproducibility (different compilers, architectures)
+- Numerical equivalence to reference implementations
+- Behavior under different floating-point modes (`-ffast-math`)
 
 ## References
 

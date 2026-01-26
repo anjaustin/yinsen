@@ -1,21 +1,26 @@
 /*
- * YINSEN CfC - Closed-form Continuous-time Neural Networks
+ * YINSEN CfC - Gated Recurrence with Time Constants
  *
- * The CfC cell replaces ODE integration with closed-form math.
- * No loops over time. No iteration. Just topology.
+ * A recurrent cell inspired by Hasani et al.'s CfC architecture.
+ * Incorporates explicit time step (dt) via exponential decay.
  *
- * h(t) = (1 - gate) * h_prev * decay + gate * candidate
+ * Update rule:
+ *   h(t) = (1 - gate) * h_prev * decay + gate * candidate
  *
  * Where:
- *   gate     = sigmoid(W_gate @ [x, h_prev] + b_gate)
- *   candidate = tanh(W_cand @ [x, h_prev] + b_cand)
- *   decay    = exp(-dt / tau)
+ *   gate      = sigmoid(W_gate @ [x; h_prev] + b_gate)
+ *   candidate = tanh(W_cand @ [x; h_prev] + b_cand)
+ *   decay     = exp(-dt / tau)
  *
- * Verified: 17/17 tests pass including:
- *   - Determinism (identical calls produce identical results)
- *   - Bounded outputs
- *   - Proper decay behavior
- *   - Numerical stability over 10,000 iterations
+ * Verification status (single platform only):
+ *   - Determinism: TESTED (identical calls produce identical results)
+ *   - Bounded outputs: TESTED
+ *   - Numerical stability: TESTED (10,000 iterations)
+ *
+ * NOT tested:
+ *   - Cross-platform determinism
+ *   - Comparison to ODE solver
+ *   - Comparison to GRU/LSTM
  */
 
 #ifndef YINSEN_CFC_H

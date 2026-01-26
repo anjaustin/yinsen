@@ -1,13 +1,15 @@
 /*
- * YINSEN EntroMorph - Evolutionary CfC Engine
+ * YINSEN EntroMorph - Evolutionary Engine for CfC Networks
  *
- * Natural selection on silicon.
- * Genomes mutate, compete, and die. The fittest get frozen.
+ * Provides genome representation, mutation, and export for CfC networks.
+ * Intended for evolutionary optimization instead of backpropagation.
  *
- * Verified:
- *   - Evolution converges to 100% accuracy on simple tasks
- *   - 344.7M binary mutations/sec
- *   - Exports working C headers
+ * Verification status: UNTESTED
+ *   - No convergence tests
+ *   - No benchmark tasks
+ *   - No performance measurements
+ *
+ * This code is present but not validated. Use at your own risk.
  */
 
 #ifndef YINSEN_ENTROMORPH_H

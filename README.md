@@ -1,133 +1,128 @@
 # Yinsen
 
-**Certifiable neural computation.**
+**Verified primitives for neural computation.**
 
-Neural networks are black boxes. You can't certify a black box.
+A research library exploring exhaustively-tested, dependency-free neural network building blocks in pure C.
 
-Yinsen is different. Every primitive is exhaustively tested. Every network is evolved with full provenance. Every deployment is deterministic across platforms.
+## Current Status: Foundation
 
-If you need neural computation you can audit, certify, and defend - that's what Yinsen is for.
+Yinsen has verified primitives. It does not yet have:
+- A trained/evolved network solving a real task
+- Cross-platform determinism testing
+- Performance benchmarks (WCET, stack usage)
+- Certification artifacts
 
-## Who is this for?
+This is research code exploring whether neural computation can be made more auditable. It is not production-ready.
 
-Organizations deploying neural computation where:
+## What's Actually Here
 
-- **Certification is required** - aerospace (DO-178C), medical (IEC 62304), automotive (ISO 26262)
-- **Determinism is mandatory** - safety-critical systems, financial applications
-- **Resources are constrained** - embedded, edge, IoT
-- **Audit trails are non-negotiable** - regulated industries, legal defensibility
+**Verified (exhaustively tested):**
+- Logic gates as polynomials (XOR, AND, OR, NOT, NAND, NOR, XNOR)
+- Full adder (8/8 input combinations)
+- 8-bit ripple adder (65,536/65,536 combinations)
 
-## What Yinsen provides
+**Tested (property tests, single platform):**
+- Activation functions (ReLU, Sigmoid, Tanh, GELU, SiLU)
+- Softmax (sum=1, numerical stability)
+- MatMul (correctness)
+- CfC cell (determinism on this machine, stability over 10K iterations)
 
-| Need | Solution |
-|------|----------|
-| Prove correctness | Exhaustive testing (65,536 combinations for 8-bit adder) |
-| Explain the model | Evolution with full provenance, not black-box backprop |
-| Deploy anywhere | Header-only C, no dependencies, no runtime |
-| Guarantee determinism | Same input → same output, verified |
-| Defend to auditors | Complete retention of all research artifacts |
+**Present but untested:**
+- EntroMorph evolution engine (no convergence tests)
+- Cross-platform determinism (only tested on darwin/arm64)
 
 ## Quick Start
 
 ```bash
-make test    # Run verification suite (50 tests)
+make test    # Run 50 tests
 make examples
 ./build/hello_xor
 ```
 
-## The Architecture
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                         YINSEN                                   │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                  │
-│   VERIFY              BUILD               DEPLOY                 │
-│   ──────              ─────               ──────                 │
-│   Exhaustive    ───▶  CfC networks  ───▶  Header-only C         │
-│   tests for           from verified       export with            │
-│   all primitives      primitives          zero dependencies      │
-│                                                                  │
-│   EVOLVE              AUDIT               CERTIFY                │
-│   ──────              ─────               ───────                │
-│   EntroMorph          Full lineage        Determinism            │
-│   with complete       retained in         across platforms       │
-│   provenance          journal/                                   │
-│                                                                  │
-└─────────────────────────────────────────────────────────────────┘
-```
-
 ## Verification Status
 
-| Component | Test Coverage | Status |
-|-----------|---------------|--------|
-| Logic gates (XOR, AND, OR, NOT, NAND, NOR, XNOR) | Complete truth tables | **PROVEN** |
-| Full adder | 8/8 combinations | **PROVEN** |
-| 8-bit ripple adder | 65,536/65,536 combinations | **PROVEN** |
-| Activations (ReLU, Sigmoid, Tanh, GELU, SiLU) | Numerical properties | **TESTED** |
-| Softmax | Sum=1, numerical stability | **TESTED** |
-| MatMul | Correctness vs. known values | **TESTED** |
-| CfC determinism | Identical calls → identical results | **TESTED** |
-| CfC stability | 10,000 iterations without divergence | **TESTED** |
+| Component | Coverage | Status | Notes |
+|-----------|----------|--------|-------|
+| Logic gates | Truth tables | **PROVEN** | Exact for binary inputs |
+| Full adder | 8/8 | **PROVEN** | Exhaustive |
+| 8-bit adder | 65,536/65,536 | **PROVEN** | Exhaustive |
+| Activations | Properties | **TESTED** | Single platform |
+| Softmax | Properties | **TESTED** | Single platform |
+| MatMul | Spot checks | **TESTED** | Not exhaustive |
+| CfC cell | Properties | **TESTED** | Single platform only |
+| EntroMorph | None | **UNTESTED** | No convergence proof |
+| Cross-platform | None | **UNTESTED** | Claimed, not verified |
 
 ## Project Structure
 
 ```
 yinsen/
 ├── include/
-│   ├── apu.h           # Logic shapes + arithmetic (verified)
-│   ├── onnx_shapes.h   # Activations, matmul, softmax
-│   ├── cfc.h           # Closed-form Continuous-time networks
-│   └── entromorph.h    # Evolution engine with provenance
+│   ├── apu.h           # Logic + arithmetic (verified)
+│   ├── onnx_shapes.h   # Activations, matmul, softmax (tested)
+│   ├── cfc.h           # CfC cell (tested, single platform)
+│   └── entromorph.h    # Evolution (present, untested)
 ├── test/
-│   ├── test_shapes.c   # 44 verification tests
-│   └── test_cfc.c      # 6 CfC tests
+│   ├── test_shapes.c   # 44 tests
+│   └── test_cfc.c      # 6 tests
 ├── examples/
-│   └── hello_xor.c     # Simplest demonstration
+│   └── hello_xor.c
 ├── docs/
 │   ├── THEORY.md       # Mathematical foundations
 │   ├── API.md          # Function reference
 │   └── EXAMPLES.md     # Usage guide
 └── journal/
-    ├── LMM.md          # Lincoln Manifold Method (research process)
-    ├── scratchpad/     # Active explorations
-    └── archive/        # Completed research (never deleted)
+    ├── LMM.md          # Research methodology
+    ├── scratchpad/     # Active work
+    └── archive/        # Completed explorations
 ```
 
 ## Usage
 
 ```c
-#include "yinsen/apu.h"          // Logic and arithmetic
-#include "yinsen/onnx_shapes.h"  // Neural network ops
-#include "yinsen/cfc.h"          // CfC networks
-#include "yinsen/entromorph.h"   // Evolution
+#include "apu.h"          // Logic and arithmetic
+#include "onnx_shapes.h"  // Neural network ops
+#include "cfc.h"          // CfC networks
+#include "entromorph.h"   // Evolution (untested)
 ```
 
 ```bash
 gcc -I./include -O2 -std=c11 your_code.c -lm
 ```
 
-## Core Principles
+## Research Questions
 
-1. **Certifiable** - Built for environments where you must prove correctness
-2. **Auditable** - Full provenance, complete retention, no black boxes
-3. **Minimal** - Header-only C, zero dependencies beyond libc
-4. **Deterministic** - Same input always produces same output
-5. **Verified** - Exhaustive testing where feasible, property testing elsewhere
+This repo explores:
+
+1. **Can neural primitives be exhaustively verified?** (Partial: yes for logic/arithmetic, property tests for continuous functions)
+
+2. **Can we achieve cross-platform determinism?** (Unknown: untested)
+
+3. **Can evolution replace backprop with full provenance?** (Unknown: evolution engine untested)
+
+4. **Is CfC meaningfully different from GRU?** (Unknown: no comparative benchmarks)
+
+## Known Limitations
+
+- **No end-to-end demo**: Primitives exist but haven't produced a working network
+- **Determinism untested across platforms**: `expf()` may vary between implementations
+- **CfC is a gated recurrence**: The "continuous-time" framing comes from literature; our implementation is a discrete update rule
+- **Header-only tradeoffs**: Good for embedding, bad for build times at scale
+- **No WCET/stack analysis**: Can't deploy to hard real-time without this
 
 ## Documentation
 
-- [THEORY.md](docs/THEORY.md) - Mathematical foundations (why polynomials, why CfC)
-- [API.md](docs/API.md) - Complete function reference
-- [EXAMPLES.md](docs/EXAMPLES.md) - Practical usage examples
+- [THEORY.md](docs/THEORY.md) - Mathematical foundations
+- [API.md](docs/API.md) - Function reference  
+- [EXAMPLES.md](docs/EXAMPLES.md) - Usage examples
 
-## Roadmap
+## Roadmap (What Would Make This Real)
 
-- [ ] End-to-end demo: evolve → export → deploy → verify
-- [ ] Cross-platform determinism CI (Linux, macOS, Windows, ARM)
-- [ ] Compliance mapping (DO-178C, ISO 26262, IEC 62304)
-- [ ] MISRA C compliance analysis
-- [ ] Formal verification of critical primitives
+- [ ] **Convergence test**: Prove EntroMorph produces fit networks
+- [ ] **One benchmark task**: Solve something, report accuracy
+- [ ] **Cross-platform CI**: Test determinism on Linux/macOS/Windows, ARM/x86
+- [ ] **WCET analysis**: For one platform, one network size
+- [ ] **End-to-end demo**: Evolve → export → deploy → verify identical output
 
 ## License
 
