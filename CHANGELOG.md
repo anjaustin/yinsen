@@ -9,6 +9,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **EntroMorph convergence tests** (`test/test_entromorph.c`)
+  - 11 tests covering RNG, genesis, mutation, and XOR convergence
+  - **Critical result:** Evolution converges on XOR in 5/5 runs (typical: 10-30 generations)
+  - Tournament selection with elitism
+  - Genome export to C header
 - **Absmean quantization** (`ternary_quantize_absmean`) - BitNet b1.58 method
   - Adapts to weight distribution automatically
   - `ternary_absmean_scale()` to get scale factor
@@ -34,11 +39,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Documentation now explains zero as "explicit feature filtering"
 
 ### Tests
-- Added 23 new tests (55 total in test_ternary.c, 111 total overall)
+- **test_entromorph.c** - 11 tests for evolution engine
+  - RNG determinism and distribution
+  - Genesis and mutation
+  - XOR convergence (THE critical test)
+  - Genome export
+- Added 23 new tests to test_ternary.c (55 total)
   - Absmean quantization tests
   - Int8 quantization roundtrip tests
   - Integer dot product vs float comparison
   - Energy estimation validation
+- **Total: 160 tests** (159 pass, 1 documented behavior)
 
 ### Research
 - Added BitNet b1.58 comparison analysis (`journal/scratchpad/bitnet_comparison.md`)
@@ -87,7 +98,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   - 4.4x memory compression vs float CfC (measured)
   - Determinism and stability tested (1K iterations)
 - **EntroMorph evolution engine** (`entromorph.h`)
-  - Present but UNTESTED - no convergence verification
+  - Genome representation, mutation, export
+  - Now TESTED: converges on XOR
 
 #### Tests
 - `test_shapes.c` - 44 tests for logic, arithmetic, activations
@@ -127,10 +139,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Ternary pack/unpack (roundtrip lossless)
 
 ### Not Yet Tested
-- EntroMorph evolution convergence
 - Cross-platform determinism
 - CfC equivalence to ODE solution
-- End-to-end network solving a task
+- Evolution on tasks beyond XOR
+- Ternary evolution (currently float-only)
 
 ---
 

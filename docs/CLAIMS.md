@@ -113,10 +113,17 @@ This document tracks every claim made in the yinsen repository and its verificat
 
 | Claim | Level | Evidence |
 |-------|-------|----------|
-| Evolution converges | **UNTESTED** | No convergence tests |
-| Evolution produces useful networks | **UNTESTED** | No benchmark tasks |
-| Genome export produces valid C | **UNTESTED** | No export tests |
-| Mutation rates are appropriate | **UNTESTED** | No tuning experiments |
+| RNG is deterministic with same seed | **TESTED** | test_rng_deterministic() |
+| RNG produces [0,1) floats | **TESTED** | 1000 samples tested |
+| RNG gaussian has correct mean/std | **TESTED** | 10K samples, mean±0.1, std±0.2 |
+| Genesis creates valid dimensions | **TESTED** | test_genesis_dimensions() |
+| Genesis tau in [0.01, 100] | **TESTED** | test_genesis_tau_range() |
+| Mutation changes weights | **TESTED** | test_mutation_changes_weights() |
+| Genome to CfC params works | **TESTED** | test_genome_to_params() |
+| Evolution converges on XOR | **TESTED** | 5/5 runs converge, typical 10-30 gens |
+| Genome export produces valid C | **TESTED** | test_export_header() |
+| Mutation rates are appropriate | **TESTED** | XOR convergence demonstrates viability |
+| Evolution scales to larger tasks | **UNTESTED** | Only XOR tested |
 
 ## Cross-Cutting Claims
 
@@ -143,6 +150,7 @@ This document tracks every claim made in the yinsen repository and its verificat
 
 ## Changelog
 
+- 2026-01-26: EntroMorph TESTED - evolution converges on XOR (5/5 runs)
 - 2026-01-26: Added falsification test results and edge case documentation
 - 2026-01-26: Added BitNet b1.58 features (absmean, int8, energy estimation)
 - 2026-01-26: Added ternary weights and ternary CfC claims

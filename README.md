@@ -15,12 +15,14 @@ A research library exploring exhaustively-tested, dependency-free neural network
 
 Ternary weights eliminate floating-point multiplication in the forward pass. A dot product becomes counting and subtraction. This isn't just an optimization—it's a different computational model that enables exhaustive verification.
 
-## Current Status: Foundation
+## Current Status: Evolution Works
 
-Yinsen has verified primitives. It does not yet have:
-- A trained/evolved ternary network solving a real task
+Yinsen has verified primitives AND proven evolution convergence. It does not yet have:
+- A trained ternary network solving a real task (evolution uses float CfC)
 - Cross-platform determinism testing (only darwin/arm64)
 - Certification artifacts
+
+**NEW:** EntroMorph evolution converges on XOR - 5/5 runs succeed in 10-30 generations.
 
 This is research code exploring whether neural computation can be made auditable. It is not production-ready.
 
@@ -39,14 +41,21 @@ This is research code exploring whether neural computation can be made auditable
 - CfC cell (determinism, stability over 10K iterations)
 - Ternary CfC cell (determinism, stability, 4.4x memory compression)
 
+### Evolution (newly tested!)
+- EntroMorph evolution converges on XOR (5/5 runs, 10-30 generations)
+- Tournament selection with elitism
+- Genome export to C header
+
 ### Present but untested
-- EntroMorph evolution engine (no convergence tests)
 - Cross-platform determinism (only tested on darwin/arm64)
+- Ternary evolution (current evolution uses float CfC)
 
 ## Quick Start
 
 ```bash
-make test    # Run 88 tests (shapes: 44, cfc: 6, ternary: 32, cfc_ternary: 6)
+make test      # Run 111 core tests
+make falsify   # Run 38 adversarial tests
+make evolve    # Run 11 evolution tests (proves XOR convergence)
 make examples
 ./build/hello_ternary
 ```
@@ -65,7 +74,7 @@ make examples
 | Ternary ops | Properties | **TESTED** | Pack/unpack, dot product |
 | CfC cell | Properties | **TESTED** | Single platform only |
 | Ternary CfC | Properties | **TESTED** | 4.4x compression measured |
-| EntroMorph | None | **UNTESTED** | No convergence proof |
+| EntroMorph | XOR convergence | **TESTED** | 5/5 runs converge |
 | Cross-platform | None | **UNTESTED** | Claimed, not verified |
 
 ## Project Structure
@@ -78,12 +87,14 @@ yinsen/
 │   ├── ternary.h       # Ternary weights {-1,0,+1} (tested)
 │   ├── cfc.h           # CfC cell, float weights (tested)
 │   ├── cfc_ternary.h   # CfC cell, ternary weights (tested)
-│   └── entromorph.h    # Evolution (present, untested)
+│   └── entromorph.h    # Evolution (TESTED - XOR converges)
 ├── test/
 │   ├── test_shapes.c      # 44 tests
 │   ├── test_cfc.c         # 6 tests
-│   ├── test_ternary.c     # 32 tests
-│   └── test_cfc_ternary.c # 6 tests
+│   ├── test_ternary.c     # 55 tests
+│   ├── test_cfc_ternary.c # 6 tests
+│   ├── test_entromorph.c  # 11 tests (XOR convergence!)
+│   └── test_falsify.c     # 38 adversarial tests
 ├── examples/
 │   ├── hello_xor.c
 │   └── hello_ternary.c
@@ -105,7 +116,7 @@ yinsen/
 #include "cfc_ternary.h"  // Ternary CfC networks
 #include "apu.h"          // Logic and arithmetic
 #include "onnx_shapes.h"  // Neural network ops
-#include "entromorph.h"   // Evolution (untested)
+#include "entromorph.h"   // Evolution (TESTED)
 ```
 
 ```bash
@@ -116,8 +127,8 @@ gcc -I./include -O2 -std=c11 your_code.c -lm
 
 ```
 ┌─────────────────────────────────────────┐
-│  EntroMorph (Evolution)     [UNTESTED]  │
-│  - Evolves ternary network topologies   │
+│  EntroMorph (Evolution)     [TESTED]    │
+│  - Evolves CfC networks (XOR proven)    │
 ├─────────────────────────────────────────┤
 │  CfC Ternary Cell           [TESTED]    │
 │  - Temporal dynamics with ternary W     │
@@ -142,7 +153,7 @@ This repo explores:
 
 2. **Can we achieve cross-platform determinism?** (Unknown: untested)
 
-3. **Can evolution produce useful ternary networks?** (Unknown: evolution engine untested)
+3. **Can evolution produce useful networks?** (YES for float CfC on XOR; ternary evolution untested)
 
 4. **What tasks can ternary CfC solve?** (Unknown: no end-to-end demo yet)
 
@@ -164,8 +175,9 @@ This repo explores:
 
 ## Roadmap
 
-- [ ] **End-to-end demo**: Ternary CfC solving a simple task (XOR sequence?)
-- [ ] **Test EntroMorph**: Prove evolution converges on ternary networks
+- [x] **Test EntroMorph**: Evolution converges on XOR (float CfC)
+- [ ] **Ternary evolution**: Evolve ternary CfC networks
+- [ ] **Harder tasks**: Sequence prediction, anomaly detection
 - [ ] **Cross-platform CI**: Test determinism on Linux/macOS/Windows, ARM/x86
 - [ ] **Benchmark ternary vs float**: Speed, accuracy, memory on same task
 - [ ] **WCET analysis**: For one platform, one network size

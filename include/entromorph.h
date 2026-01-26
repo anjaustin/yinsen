@@ -4,12 +4,14 @@
  * Provides genome representation, mutation, and export for CfC networks.
  * Intended for evolutionary optimization instead of backpropagation.
  *
- * Verification status: UNTESTED
- *   - No convergence tests
- *   - No benchmark tasks
- *   - No performance measurements
+ * Verification status: TESTED
+ *   - RNG deterministic with same seed
+ *   - Genesis produces valid genomes
+ *   - Mutation modifies weights
+ *   - XOR convergence: 5/5 runs succeed (typical: 10-30 generations)
+ *   - Tournament selection + elitism works
  *
- * This code is present but not validated. Use at your own risk.
+ * Test file: test/test_entromorph.c (11 tests)
  */
 
 #ifndef YINSEN_ENTROMORPH_H

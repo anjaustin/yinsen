@@ -33,6 +33,11 @@ falsify: $(BUILD_DIR) $(BUILD_DIR)/test_falsify
 	@echo "Running falsification tests..."
 	@$(BUILD_DIR)/test_falsify
 
+# Evolution tests (entromorph convergence)
+evolve: $(BUILD_DIR) $(BUILD_DIR)/test_entromorph
+	@echo "Running evolution tests..."
+	@$(BUILD_DIR)/test_entromorph
+
 $(BUILD_DIR)/test_shapes: $(TEST_DIR)/test_shapes.c include/apu.h include/onnx_shapes.h
 	$(CC) $(CFLAGS) -o $@ $< $(LDFLAGS)
 
@@ -46,6 +51,9 @@ $(BUILD_DIR)/test_cfc_ternary: $(TEST_DIR)/test_cfc_ternary.c include/cfc_ternar
 	$(CC) $(CFLAGS) -o $@ $< $(LDFLAGS)
 
 $(BUILD_DIR)/test_falsify: $(TEST_DIR)/test_falsify.c include/ternary.h include/cfc_ternary.h include/onnx_shapes.h
+	$(CC) $(CFLAGS) -o $@ $< $(LDFLAGS)
+
+$(BUILD_DIR)/test_entromorph: $(TEST_DIR)/test_entromorph.c include/entromorph.h include/cfc.h include/onnx_shapes.h
 	$(CC) $(CFLAGS) -o $@ $< $(LDFLAGS)
 
 # Examples
