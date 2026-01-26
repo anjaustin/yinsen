@@ -8,7 +8,41 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+- **Absmean quantization** (`ternary_quantize_absmean`) - BitNet b1.58 method
+  - Adapts to weight distribution automatically
+  - `ternary_absmean_scale()` to get scale factor
+- **Int8 activation quantization** - for fully integer forward pass
+  - `ternary_quantize_activations()` - symmetric per-tensor quantization
+  - `ternary_dequantize_activations()` - convert back to float
+  - `TernaryQuantParams` struct for scale/zero_point
+- **Integer ternary operations**
+  - `ternary_dot_int8()` - integer-only dot product
+  - `ternary_matvec_int8()` - integer-only matrix-vector multiply
+- **Energy estimation** - based on Horowitz 2014 (7nm estimates)
+  - `ternary_matvec_energy_pj()` - ternary path energy
+  - `float_matvec_energy_pj()` - float path energy
+  - `ternary_energy_savings_ratio()` - ~43x savings for matmul
+- **Extended sparsity statistics**
+  - `TernaryStats` struct with full distribution
+  - `ternary_count_zeros()`, `ternary_count_positive()`, `ternary_count_negative()`
+  - `ternary_sparsity()` - fraction of zero weights
+  - `ternary_stats()` - compute all statistics
+
+### Changed
+- Updated terminology to "1.58-bit" (log2(3) = 1.58) per BitNet convention
+- Documentation now explains zero as "explicit feature filtering"
+
+### Tests
+- Added 23 new tests (55 total in test_ternary.c, 111 total overall)
+  - Absmean quantization tests
+  - Int8 quantization roundtrip tests
+  - Integer dot product vs float comparison
+  - Energy estimation validation
+
+### Research
+- Added BitNet b1.58 comparison analysis (`journal/scratchpad/bitnet_comparison.md`)
+- Added actionable learnings document (`journal/scratchpad/bitnet_learnings.md`)
 
 ---
 
