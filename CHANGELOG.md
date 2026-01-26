@@ -43,6 +43,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Research
 - Added BitNet b1.58 comparison analysis (`journal/scratchpad/bitnet_comparison.md`)
 - Added actionable learnings document (`journal/scratchpad/bitnet_learnings.md`)
+- LMM exploration of Yinsen's potential (`journal/scratchpad/potential_*.md`)
+
+### Falsification Testing
+- **New test suite:** `test/test_falsify.c` with 38 adversarial tests
+- **Edge cases documented:** `docs/EDGE_CASES.md`
+- Verified robust against: zeros, denormals, large values, misaligned lengths
+- Verified 10K iteration stability
+- Documented known behaviors: NaN propagation, negative dt, zero tau
+
+### Documentation
+- **API.md:** Complete ternary.h and cfc_ternary.h reference
+- **EXAMPLES.md:** 5 new ternary examples (7-11)
+- **CLAIMS.md:** Updated with falsification results
 
 ---
 
