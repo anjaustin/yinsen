@@ -2,7 +2,8 @@
 
 **Date:** 2026-01-26  
 **Platform:** darwin/arm64  
-**Compiler:** gcc (Apple clang)
+**Compiler:** gcc (Apple clang)  
+**Total Tests:** 161
 
 This document provides complete, honest accounting of what has been verified, tested, falsified, and remains unknown.
 
@@ -272,13 +273,15 @@ See: `docs/FALSIFICATION_ENTROMORPH.md`
 
 | Metric | Count |
 |--------|-------|
-| Components PROVEN | 10 |
+| Components PROVEN | 11 |
 | Components TESTED | 18+ |
 | Components FALSIFIED | 1 |
 | Known edge cases | 4 |
 | Core tests | 111 |
 | Falsification tests | 38 |
-| Total test assertions | 149+ |
+| Evolution tests | 11 |
+| Exhaustive proofs | 1 (4×4 matvec: 43M verifications) |
+| **Total tests** | **161** |
 
 ---
 

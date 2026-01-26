@@ -192,79 +192,37 @@ int main() {
 }
 ```
 
-## 5. Evolving a CfC Network
+## 5. ~~Evolving a CfC Network~~ (DEPRECATED)
 
-Using EntroMorph to evolve weights.
+> **WARNING: EntroMorph evolution is FALSIFIED and does not work.**
+> 
+> Falsification testing revealed that EntroMorph "solutions" have 0% confidence
+> margins - they predict ~0.5 for all inputs and happen to round correctly by
+> chance. This is NOT learning.
+>
+> See [FALSIFICATION_ENTROMORPH.md](FALSIFICATION_ENTROMORPH.md) for details.
+>
+> **Do not use this example.** The code below is preserved for reference only.
 
 ```c
+// THIS EXAMPLE IS BROKEN - DO NOT USE
+// EntroMorph evolution does not produce learned solutions.
+// See docs/FALSIFICATION_ENTROMORPH.md
+
 #include <stdio.h>
 #include "yinsen/entromorph.h"
 
-// Simple fitness function: classify XOR
+// This fitness function APPEARS to work but solutions have 0% confidence
 float evaluate(LiquidGenome* genome) {
-    CfCParams cell;
-    CfCOutputParams output;
-    entro_genome_to_params(genome, &cell, &output);
-
-    int correct = 0;
-    float patterns[4][2] = {{0,0}, {0,1}, {1,0}, {1,1}};
-    int labels[4] = {0, 1, 1, 0};  // XOR outputs
-
-    for (int i = 0; i < 4; i++) {
-        float h[4] = {0};
-        float h_new[4];
-
-        // Single step
-        yinsen_cfc_cell(patterns[i], h, 0.1f, &cell, h_new);
-
-        // Get prediction
-        float probs[2];
-        yinsen_cfc_output_softmax(h_new, &output, probs);
-
-        int pred = probs[1] > probs[0] ? 1 : 0;
-        if (pred == labels[i]) correct++;
-    }
-
-    return (float)correct / 4.0f;  // Accuracy
+    // ... code omitted - see falsification report ...
+    return 0.0f;
 }
 
 int main() {
-    EntroRNG rng;
-    entro_rng_seed(&rng, 12345);
-
-    // Create initial genome
-    LiquidGenome genome;
-    entro_genesis(&genome, 2, 4, 2, &rng, 0);
-
-    // Evolution loop
-    LiquidGenome best = genome;
-    best.fitness = evaluate(&best);
-
-    for (int gen = 0; gen < 1000; gen++) {
-        // Create mutant
-        LiquidGenome mutant = best;
-        entro_mutate(&mutant, &MUTATION_DEFAULT, &rng);
-        mutant.fitness = evaluate(&mutant);
-
-        // Keep if better
-        if (mutant.fitness > best.fitness) {
-            best = mutant;
-            printf("Gen %d: fitness = %.2f\n", gen, best.fitness);
-        }
-
-        if (best.fitness >= 1.0f) {
-            printf("Solved at generation %d!\n", gen);
-            break;
-        }
-    }
-
-    // Export winner
-    FILE* f = fopen("evolved_xor.h", "w");
-    entro_export_header(&best, "XOR_CHIP", f);
-    fclose(f);
-
-    printf("Exported to evolved_xor.h\n");
-    return 0;
+    // EntroMorph will "converge" but solutions are meaningless
+    // 100/100 runs "succeed" with 0/100 having >10% confidence margin
+    printf("ERROR: EntroMorph is FALSIFIED. Do not use.\n");
+    return 1;
 }
 ```
 

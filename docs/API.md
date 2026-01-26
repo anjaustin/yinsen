@@ -515,6 +515,19 @@ void yinsen_cfc_ternary_memory_comparison(
 
 ## entromorph.h - Evolution Engine
 
+> **WARNING: FALSIFIED**
+>
+> EntroMorph evolution does NOT work. Falsification testing revealed:
+> - 100/100 runs "converge" but 0/100 have >10% confidence margin
+> - Solutions predict ~0.5 for all inputs (random chance)
+> - Fragile to 1% noise (88% accuracy vs expected 100%)
+>
+> **Do not use for learning tasks.** The component functions (RNG, genesis,
+> mutation, export) work correctly, but the evolution process does not
+> produce learned solutions.
+>
+> See [FALSIFICATION_ENTROMORPH.md](FALSIFICATION_ENTROMORPH.md) for details.
+
 ### Types
 
 ```c
@@ -620,3 +633,13 @@ static const MutationParams MUTATION_DEFAULT = {
     .tau_mutation_std = 0.2f,
 };
 ```
+
+---
+
+## See Also
+
+- [EDGE_CASES.md](EDGE_CASES.md) - Edge case behavior for ternary ops, CfC, and quantization
+- [CLAIMS.md](CLAIMS.md) - Verification status of all claims
+- [VERIFICATION.md](VERIFICATION.md) - Complete test verification report
+- [FALSIFICATION_ENTROMORPH.md](FALSIFICATION_ENTROMORPH.md) - Why EntroMorph evolution is broken
+- [EXAMPLES.md](EXAMPLES.md) - Usage examples for each module

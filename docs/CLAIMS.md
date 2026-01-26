@@ -4,7 +4,7 @@ This document tracks every claim made in the yinsen repository and its verificat
 
 **Last Updated:** 2026-01-26  
 **Platform:** darwin/arm64  
-**Total Tests:** 149 (111 core + 38 falsification)
+**Total Tests:** 161 (111 core + 38 falsification + 11 entromorph + 1 exhaustive 4×4)
 
 ## Verification Levels
 

@@ -181,6 +181,14 @@ int yinsen_cfc_ternary_cell_safe(
 
 ---
 
+## See Also
+
+- [API.md](API.md) - Complete function reference
+- [CLAIMS.md](CLAIMS.md) - Verification status of all claims
+- [VERIFICATION.md](VERIFICATION.md) - Complete test verification report
+
+---
+
 ## Changelog
 
 - 2026-01-26: Initial falsification testing, documented edge cases
