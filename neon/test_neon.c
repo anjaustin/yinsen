@@ -22,7 +22,12 @@ extern void neon_ternary_matvec_sdot_4oc(
     int32_t* out, const int8_t* act, const uint8_t* wgt, int N, int K);
 extern void neon_ternary_matvec_sdot_8oc(
     int32_t* out, const int8_t* act, const uint8_t* wgt, int N, int K);
+extern void neon_ternary_matvec_blocked8(
+    int32_t* out, const int8_t* act, const uint8_t* wgt, int N, int K);
 #endif
+
+extern void pack_weights_blocked8(
+    uint8_t* packed, const int8_t* weights, int N, int K);
 
 extern void pack_weights_k_vertical(
     uint8_t* packed, const int8_t* weights, int N, int K);
@@ -190,7 +195,7 @@ int main(void) {
     double sdot_4oc_ns = (double)(t1 - t0) / iters;
     double sdot_4oc_gops = ops / sdot_4oc_ns;
     
-    // Benchmark SDOT 8OC (the new hotness)
+    // Benchmark SDOT 8OC (linear layout)
     t0 = get_time_ns();
     for (int i = 0; i < iters; i++) {
         neon_ternary_matvec_sdot_8oc(out_sdot, act, packed, N, K);
@@ -199,15 +204,52 @@ int main(void) {
     double sdot_8oc_ns = (double)(t1 - t0) / iters;
     double sdot_8oc_gops = ops / sdot_8oc_ns;
     
-    printf("  SDOT 1OC: %.1f us (%.2f GOP/s)\n", sdot_1oc_ns / 1000, sdot_1oc_gops);
-    printf("  SDOT 4OC: %.1f us (%.2f GOP/s)\n", sdot_4oc_ns / 1000, sdot_4oc_gops);
-    printf("  SDOT 8OC: %.1f us (%.2f GOP/s)\n", sdot_8oc_ns / 1000, sdot_8oc_gops);
-    printf("  8OC vs 1OC: %.1fx\n", sdot_1oc_ns / sdot_8oc_ns);
+    // Blocked-8 format
+    uint8_t* packed_b8 = malloc(N * K_packed);
+    pack_weights_blocked8(packed_b8, weights, N, K);
+    
+    // Verify Blocked-8
+    int32_t* out_b8 = malloc(N * sizeof(int32_t));
+    memset(out_b8, 0, N * sizeof(int32_t));
+    neon_ternary_matvec_blocked8(out_b8, act, packed_b8, N, K);
+    
+    int b8_errors = 0;
+    for (int i = 0; i < N; i++) {
+        if (out_ref[i] != out_b8[i]) {
+            b8_errors++;
+            if (b8_errors <= 5) {
+                printf("  Blocked-8 mismatch [%d]: ref=%d, b8=%d\n",
+                       i, out_ref[i], out_b8[i]);
+            }
+        }
+    }
+    if (b8_errors == 0) {
+        printf("\nBlocked-8 verification: PASSED\n");
+    } else {
+        printf("\nBlocked-8 verification: FAILED (%d errors)\n", b8_errors);
+    }
+    
+    // Benchmark Blocked-8
+    t0 = get_time_ns();
+    for (int i = 0; i < iters; i++) {
+        neon_ternary_matvec_blocked8(out_b8, act, packed_b8, N, K);
+    }
+    t1 = get_time_ns();
+    double b8_ns = (double)(t1 - t0) / iters;
+    double b8_gops = ops / b8_ns;
+    
+    printf("  SDOT 1OC:    %.1f us (%.2f GOP/s)\n", sdot_1oc_ns / 1000, sdot_1oc_gops);
+    printf("  SDOT 4OC:    %.1f us (%.2f GOP/s)\n", sdot_4oc_ns / 1000, sdot_4oc_gops);
+    printf("  SDOT 8OC:    %.1f us (%.2f GOP/s)\n", sdot_8oc_ns / 1000, sdot_8oc_gops);
+    printf("  Blocked-8:   %.1f us (%.2f GOP/s)\n", b8_ns / 1000, b8_gops);
+    printf("  B8 vs 8OC:   %.2fx\n", sdot_8oc_ns / b8_ns);
     
     free(out_sdot);
+    free(out_b8);
+    free(packed_b8);
     
     // Use best result for estimate
-    double best_gops = sdot_8oc_gops;
+    double best_gops = (b8_gops > sdot_8oc_gops) ? b8_gops : sdot_8oc_gops;
 #else
     double best_gops = neon_gops;
 #endif

@@ -339,10 +339,13 @@ void neon_ternary_matmul(
 }
 
 /*
- * pack_weights_k_vertical - Pack weights into K-vertical format
+ * pack_weights_k_vertical - Pack weights into K-vertical format (Linear layout)
  *
  * Input: weights[N, K] with values -1, 0, +1
  * Output: packed[N, K/4] with 4 trits per byte
+ *
+ * Layout: Row-major, each row is K/4 bytes
+ *   packed[n * K/4 + k/4] = 4 weights for output channel n, input k..k+3
  */
 void pack_weights_k_vertical(
     uint8_t* __restrict__ packed,
@@ -367,3 +370,153 @@ void pack_weights_k_vertical(
         }
     }
 }
+
+/*
+ * pack_weights_blocked8 - Pack weights into Blocked-8 format for cache efficiency
+ *
+ * Input: weights[N, K] with values -1, 0, +1
+ * Output: packed[N/8, K/4, 8] - blocked by 8 output channels
+ *
+ * Layout: Groups of 8 output channels are stored together for each K-block
+ *   Block(n_block, k_block):
+ *     Row0[k_block*64 .. k_block*64+63] (16 bytes)
+ *     Row1[k_block*64 .. k_block*64+63] (16 bytes)
+ *     ...
+ *     Row7[k_block*64 .. k_block*64+63] (16 bytes)
+ *   Total: 128 bytes per block, fits in 2 cache lines
+ *
+ * This ensures all 8 weight row loads in the inner loop hit the same cache lines!
+ */
+void pack_weights_blocked8(
+    uint8_t* __restrict__ packed,
+    const int8_t* __restrict__ weights,
+    int N,  // Must be multiple of 8
+    int K   // Must be multiple of 64
+) {
+    const int K_packed = K / 4;       // Packed bytes per row
+    const int K_blocks = K / 64;      // Number of 64-element K blocks
+    const int N_blocks = N / 8;       // Number of 8-row N blocks
+    
+    // Each block is 8 rows × 16 bytes = 128 bytes
+    const int block_stride = 8 * 16;  // 128 bytes per block
+    
+    for (int nb = 0; nb < N_blocks; nb++) {
+        for (int kb = 0; kb < K_blocks; kb++) {
+            // Destination: block (nb, kb)
+            uint8_t* dst = packed + (nb * K_blocks + kb) * block_stride;
+            
+            // Pack 8 rows for this K-block
+            for (int row = 0; row < 8; row++) {
+                int n = nb * 8 + row;
+                int k_start = kb * 64;
+                
+                // Pack 16 bytes (64 weights) for this row
+                for (int kk = 0; kk < 64; kk += 4) {
+                    int k = k_start + kk;
+                    uint8_t byte = 0;
+                    for (int i = 0; i < 4; i++) {
+                        int8_t w = weights[n * K + k + i];
+                        uint8_t trit;
+                        if (w == 1) trit = 1;
+                        else if (w == -1) trit = 2;
+                        else trit = 0;
+                        byte |= (trit << (i * 2));
+                    }
+                    dst[row * 16 + kk/4] = byte;
+                }
+            }
+        }
+    }
+}
+
+/*
+ * neon_ternary_matvec_blocked8 - Kernel optimized for Blocked-8 weight layout
+ *
+ * This kernel achieves maximum cache efficiency by reading 8 consecutive
+ * weight rows from the same 128-byte block (2 cache lines).
+ * 
+ * Optimizations:
+ * - Blocked-8 layout for cache efficiency
+ * - Software prefetching (2 blocks ahead)
+ */
+#if defined(__ARM_FEATURE_DOTPROD)
+void neon_ternary_matvec_blocked8(
+    int32_t* __restrict__ out,
+    const int8_t* __restrict__ act,
+    const uint8_t* __restrict__ wgt,  // Blocked-8 format!
+    int N,  // Output channels (must be multiple of 8)
+    int K   // Input channels (must be multiple of 64)
+) {
+    const int K_blocks = K / 64;
+    const int block_stride = 8 * 16;  // 128 bytes per block
+    
+    // Constants
+    int8x16_t lut = vld1q_s8(TRIT_DECODE_TABLE);
+    uint8x16_t mask_03 = vdupq_n_u8(0x03);
+    
+    // Process 8 output channels at a time
+    for (int n = 0; n < N; n += 8) {
+        int nb = n / 8;
+        
+        // 8 Accumulators
+        int32x4_t acc0 = vdupq_n_s32(0);
+        int32x4_t acc1 = vdupq_n_s32(0);
+        int32x4_t acc2 = vdupq_n_s32(0);
+        int32x4_t acc3 = vdupq_n_s32(0);
+        int32x4_t acc4 = vdupq_n_s32(0);
+        int32x4_t acc5 = vdupq_n_s32(0);
+        int32x4_t acc6 = vdupq_n_s32(0);
+        int32x4_t acc7 = vdupq_n_s32(0);
+        
+        const int8_t* a_ptr = act;
+        const uint8_t* w_base = wgt + nb * K_blocks * block_stride;
+        
+        // Inner loop over K-blocks
+        for (int kb = 0; kb < K_blocks; kb++) {
+            // Prefetch next blocks (2 ahead)
+            if (kb + 2 < K_blocks) {
+                __builtin_prefetch(a_ptr + 128, 0, 3);
+                __builtin_prefetch(w_base + (kb + 2) * block_stride, 0, 3);
+                __builtin_prefetch(w_base + (kb + 2) * block_stride + 64, 0, 3);
+            }
+            
+            // Load activations (64 elements, deinterleaved)
+            int8x16x4_t a = vld4q_s8(a_ptr);
+            a_ptr += 64;
+            
+            // Weight block base pointer - all 8 rows are contiguous!
+            const uint8_t* w_block = w_base + kb * block_stride;
+            
+            // Process all 8 channels
+            #define PROCESS_ROW(ACC, ROW) { \
+                uint8x16_t w = vld1q_u8(w_block + ROW * 16); \
+                ACC = vdotq_s32(ACC, vqtbl1q_s8(lut, vandq_u8(w, mask_03)), a.val[0]); \
+                ACC = vdotq_s32(ACC, vqtbl1q_s8(lut, vandq_u8(vshrq_n_u8(w, 2), mask_03)), a.val[1]); \
+                ACC = vdotq_s32(ACC, vqtbl1q_s8(lut, vandq_u8(vshrq_n_u8(w, 4), mask_03)), a.val[2]); \
+                ACC = vdotq_s32(ACC, vqtbl1q_s8(lut, vshrq_n_u8(w, 6)), a.val[3]); \
+            }
+            
+            PROCESS_ROW(acc0, 0);
+            PROCESS_ROW(acc1, 1);
+            PROCESS_ROW(acc2, 2);
+            PROCESS_ROW(acc3, 3);
+            PROCESS_ROW(acc4, 4);
+            PROCESS_ROW(acc5, 5);
+            PROCESS_ROW(acc6, 6);
+            PROCESS_ROW(acc7, 7);
+            
+            #undef PROCESS_ROW
+        }
+        
+        // Final reduction and store
+        out[n + 0] = vaddvq_s32(acc0);
+        out[n + 1] = vaddvq_s32(acc1);
+        out[n + 2] = vaddvq_s32(acc2);
+        out[n + 3] = vaddvq_s32(acc3);
+        out[n + 4] = vaddvq_s32(acc4);
+        out[n + 5] = vaddvq_s32(acc5);
+        out[n + 6] = vaddvq_s32(acc6);
+        out[n + 7] = vaddvq_s32(acc7);
+    }
+}
+#endif
