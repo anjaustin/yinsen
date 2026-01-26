@@ -215,24 +215,25 @@ Tension with Node 1: ...
 ### Recommended Naming
 
 ```
-/tmp/[project]_raw.md        # Phase 1
-/tmp/[project]_nodes.md      # Phase 2
-/tmp/[project]_reflect.md    # Phase 3
-/tmp/[project]_synth.md      # Phase 4
+journal/scratchpad/[project]_raw.md        # Phase 1
+journal/scratchpad/[project]_nodes.md      # Phase 2
+journal/scratchpad/[project]_reflect.md    # Phase 3
+journal/scratchpad/[project]_synth.md      # Phase 4
 ```
 
-### When to Delete
+Keep exploration files in-repo so the cognitive journey is preserved and searchable.
 
-The exploration files are scaffolding, not artifacts.
+### When to Archive
 
-**Delete after:**
-- Synthesis is complete and implementation succeeds
-- You want to preserve the cognitive journey (archive instead)
+Once synthesis is complete:
+- Move finished explorations to `journal/archive/[project]/`
+- Or delete if the journey wasn't valuable
 
-**Keep if:**
-- You might revisit the problem
-- The journey itself was valuable
-- You want to teach the method to others
+### When to Keep in Scratchpad
+
+- Active exploration in progress
+- Might revisit the problem soon
+- Want quick access during implementation
 
 ---
 
