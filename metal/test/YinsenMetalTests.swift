@@ -360,19 +360,4 @@ enum YinsenError: Error {
     case computeError(String)
 }
 
-// =============================================================================
-// MAIN
-// =============================================================================
-
-@main
-struct TestRunner {
-    static func main() throws {
-        print("Yinsen Metal Test Suite")
-        print(String(repeating: "=", count: 50))
-        
-        let tests = try YinsenMetalTests()
-        let passed = try tests.runAllTests()
-        
-        exit(passed ? 0 : 1)
-    }
-}
+// Main entry point moved to main.swift

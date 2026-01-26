@@ -14,7 +14,16 @@ let package = Package(
         .executableTarget(
             name: "YinsenMetalTests",
             dependencies: ["YinsenMetal"],
-            path: "test"
+            path: "test",
+            sources: [
+                "main.swift",
+                "YinsenMetalTests.swift",
+                "Test8x8.swift",
+                "Benchmark4x4vs8x8.swift"
+            ],
+            swiftSettings: [
+                .unsafeFlags(["-parse-as-library"])
+            ]
         ),
         .target(
             name: "YinsenMetal",
@@ -22,7 +31,8 @@ let package = Package(
             resources: [
                 .copy("../kernels/ternary_core.metal"),
                 .copy("../kernels/activations.metal"),
-                .copy("../kernels/layernorm.metal")
+                .copy("../kernels/layernorm.metal"),
+                .copy("../kernels/ternary_8x8.metal")
             ]
         )
     ]
