@@ -65,14 +65,17 @@ bool sme_hardware_present(void) {
 
 /* Check if SME is usable at runtime (OS must allow streaming mode) */
 static bool sme_runtime_available(void) {
-    /* 
-     * TODO: When Apple enables SME for userspace, change this to:
-     *   return sme_hardware_present();
-     * 
-     * For now, always return false to use reference implementation.
-     * Attempting to use SME streaming mode on macOS causes SIGILL.
+    /*
+     * ROOT MAGICK DISCOVERY (Jan 2026):
+     * SME streaming mode IS available on macOS if you:
+     * 1. Don't use NEON/FP instructions while in streaming mode
+     * 2. Save results to GPRs before SMSTOP (FP regs cleared on mode exit)
+     * 3. Use assembly kernels that respect these constraints
+     *
+     * The SIGILL we saw earlier was from printf/stdlib using NEON inside SM.
+     * Our hand-written assembly kernels work correctly.
      */
-    return false;
+    return sme_hardware_present();
 }
 
 bool sme_available(void) {
@@ -196,12 +199,22 @@ void sme_pack_weights(uint32_t* dst, const uint8_t* src, size_t rows, size_t col
  * SME Kernel Implementations
  * ============================================================================
  *
- * On systems without SME support (or when compiling without SME intrinsics),
- * we fall back to the reference implementations.
+ * We use hand-written assembly kernels for actual SME execution.
+ * These are in sme_kernels.s and handle the streaming mode transitions
+ * correctly (saving results to GPRs before SMSTOP since FP regs are cleared).
  *
- * When SME is available, we use the ARM ACLE SME intrinsics.
+ * The intrinsics-based code below is kept for reference but commented out
+ * because the compiler-generated code doesn't handle mode transitions properly.
  */
 
+/* ASM kernel declarations (defined in sme_kernels.s) */
+extern float sme_dot16_asm(const float* activations, uint32_t weights);
+extern void sme_dot16_batch_asm(float* results, const float* activations,
+                                 const uint32_t* weights, uint32_t count);
+extern void sme_matvec_16x16_asm(float* output, const uint32_t* weights,
+                                  const float* input);
+
+#if 0 /* Intrinsics version - kept for reference */
 #if defined(__ARM_FEATURE_SME) && __ARM_FEATURE_SME
 
 #include <arm_sme.h>
@@ -209,128 +222,49 @@ void sme_pack_weights(uint32_t* dst, const uint8_t* src, size_t rows, size_t col
 /* 
  * SME streaming mode kernel for 16-element dot product.
  * Uses predicate-driven accumulation to avoid unpacking trits.
+ * NOTE: This doesn't work because compiler doesn't save results
+ * to GPRs before SMSTOP. Use sme_dot16_asm instead.
  */
 __arm_locally_streaming __arm_new("za")
 float sme_dot16_sme_impl(const float* activations, uint32_t weights) {
-    // Generate predicates for +1 and -1 weights
-    // P_pos: true where weight == 0b01 (+1)
-    // P_neg: true where weight == 0b10 (-1)
-    
     svbool_t p_all = svptrue_b32();
-    
-    // Load activations as SVE vector (16 x float32)
     svfloat32_t act = svld1_f32(p_all, activations);
-    
-    // Broadcast weights to SVE vector and extract individual trits
-    // We need to compare each lane's corresponding 2 bits
-    
-    // Create lane indices: 0, 1, 2, ..., 15
     svuint32_t indices = svindex_u32(0, 1);
-    
-    // Calculate bit shift for each lane: 0, 2, 4, ..., 30
     svuint32_t shifts = svlsl_n_u32_x(p_all, indices, 1);
-    
-    // Broadcast weights and shift/mask to get each trit
     svuint32_t w_broadcast = svdup_u32(weights);
     svuint32_t trits = svand_n_u32_x(p_all, svlsr_u32_x(p_all, w_broadcast, shifts), 0x3);
-    
-    // Generate predicates
-    svbool_t p_pos = svcmpeq_n_u32(p_all, trits, 1);  // +1
-    svbool_t p_neg = svcmpeq_n_u32(p_all, trits, 2);  // -1
-    
-    // Sum positives (where weight == +1)
+    svbool_t p_pos = svcmpeq_n_u32(p_all, trits, 1);
+    svbool_t p_neg = svcmpeq_n_u32(p_all, trits, 2);
     float sum_pos = svaddv_f32(p_pos, act);
-    
-    // Sum negatives (where weight == -1)  
     float sum_neg = svaddv_f32(p_neg, act);
-    
     return sum_pos - sum_neg;
 }
+#endif
+#endif /* intrinsics reference */
 
 /*
- * SME streaming mode kernel for matrix-vector multiplication.
- * Processes 16x16 tiles using ZA accumulator.
+ * SME wrapper functions - dispatch to ASM kernels or reference
  */
-__arm_locally_streaming __arm_new("za")
-void sme_matvec_sme_impl(float* output, const uint32_t* weights, const float* input,
-                         size_t M, size_t K) {
-    size_t M_aligned = (M + 15) & ~15;
-    size_t K_aligned = (K + 15) & ~15;
-    size_t tiles_per_row = K_aligned / 16;
-    
-    svbool_t p_all = svptrue_b32();
-    
-    // Process in row-tiles (16 rows at a time)
-    for (size_t tile_row = 0; tile_row < M_aligned / 16; tile_row++) {
-        // Zero the ZA accumulator for this row-tile
-        svzero_za();
-        
-        // Accumulate across column-tiles
-        for (size_t tile_col = 0; tile_col < tiles_per_row; tile_col++) {
-            size_t tile_idx = tile_row * tiles_per_row + tile_col;
-            const uint32_t* tile_weights = weights + tile_idx * 16;
-            
-            // Load 16 input values for this column tile
-            const float* inp_ptr = input + tile_col * 16;
-            svfloat32_t inp = svld1_f32(p_all, inp_ptr);
-            
-            // Create lane indices for trit extraction
-            svuint32_t indices = svindex_u32(0, 1);
-            svuint32_t shifts = svlsl_n_u32_x(p_all, indices, 1);
-            
-            // Process each row in the tile
-            for (int r = 0; r < 16; r++) {
-                uint32_t row_weights = tile_weights[r];
-                
-                // Extract trits for this row
-                svuint32_t w_broadcast = svdup_u32(row_weights);
-                svuint32_t trits = svand_n_u32_x(p_all, 
-                    svlsr_u32_x(p_all, w_broadcast, shifts), 0x3);
-                
-                // Generate predicates
-                svbool_t p_pos = svcmpeq_n_u32(p_all, trits, 1);
-                svbool_t p_neg = svcmpeq_n_u32(p_all, trits, 2);
-                
-                // Accumulate: positive weights add, negative weights subtract
-                float sum_pos = svaddv_f32(p_pos, inp);
-                float sum_neg = svaddv_f32(p_neg, inp);
-                
-                // Store to ZA (we're treating ZA as a register file here)
-                // In a more optimized version, we'd use FMOPA directly
-                size_t out_row = tile_row * 16 + r;
-                if (out_row < M) {
-                    output[out_row] += sum_pos - sum_neg;
-                }
-            }
-        }
+float sme_dot16(const float* activations, uint32_t weights) {
+    if (sme_runtime_available()) {
+        return sme_dot16_asm(activations, weights);
     }
-}
-
-/* SME wrapper functions */
-float sme_dot16(const float* activations, uint32_t weights) {
-    return sme_dot16_sme_impl(activations, weights);
-}
-
-void sme_matvec(float* output, const uint32_t* weights, const float* input,
-                size_t M, size_t K) {
-    // Zero output
-    memset(output, 0, M * sizeof(float));
-    sme_matvec_sme_impl(output, weights, input, M, K);
-}
-
-#else /* No SME support - use reference implementations */
-
-float sme_dot16(const float* activations, uint32_t weights) {
     return sme_dot16_ref(activations, weights);
 }
 
 void sme_matvec(float* output, const uint32_t* weights, const float* input,
                 size_t M, size_t K) {
     memset(output, 0, M * sizeof(float));
+    
+    if (sme_runtime_available() && M == 16 && K == 16) {
+        // Use optimized 16x16 ASM kernel
+        sme_matvec_16x16_asm(output, weights, input);
+        return;
+    }
+    
+    // Fall back to reference for other sizes
     sme_matvec_ref(output, weights, input, M, K);
 }
-
-#endif /* __ARM_FEATURE_SME */
 
 /* ============================================================================
  * Batched Operations
