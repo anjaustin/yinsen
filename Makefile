@@ -38,6 +38,11 @@ evolve: $(BUILD_DIR) $(BUILD_DIR)/test_entromorph
 	@echo "Running evolution tests..."
 	@$(BUILD_DIR)/test_entromorph
 
+# 4x4 ternary matvec exhaustive proof (43M combinations, ~2-5 min)
+prove4x4: $(BUILD_DIR) $(BUILD_DIR)/test_ternary_4x4
+	@echo "Running 4x4 ternary matvec exhaustive proof..."
+	@$(BUILD_DIR)/test_ternary_4x4
+
 $(BUILD_DIR)/test_shapes: $(TEST_DIR)/test_shapes.c include/apu.h include/onnx_shapes.h
 	$(CC) $(CFLAGS) -o $@ $< $(LDFLAGS)
 
@@ -55,6 +60,9 @@ $(BUILD_DIR)/test_falsify: $(TEST_DIR)/test_falsify.c include/ternary.h include/
 
 $(BUILD_DIR)/test_entromorph: $(TEST_DIR)/test_entromorph.c include/entromorph.h include/cfc.h include/onnx_shapes.h
 	$(CC) $(CFLAGS) -o $@ $< $(LDFLAGS)
+
+$(BUILD_DIR)/test_ternary_4x4: $(TEST_DIR)/test_ternary_4x4.c include/ternary.h
+	$(CC) $(CFLAGS) -O3 -o $@ $< $(LDFLAGS)
 
 # Examples
 examples: $(BUILD_DIR) $(BUILD_DIR)/hello_xor $(BUILD_DIR)/hello_ternary

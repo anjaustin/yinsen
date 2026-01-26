@@ -73,6 +73,17 @@ All gates verified against complete truth tables.
 
 **Total: 81/81 configurations, PROVEN**
 
+### 4×4 Ternary Matrix-Vector Multiply (ternary.h)
+
+| Test | Coverage | Result |
+|------|----------|--------|
+| All weight combinations | 3^16 = 43,046,721 matrices | **PROVEN** |
+| Input vectors | [1,2,3,4] for all | PASS |
+| Output verification | Float reference | PASS |
+| Time | 0.60 seconds | 71.4 M/sec |
+
+**Total: 43,046,721/43,046,721 configurations, PROVEN**
+
 ---
 
 ## TESTED Components (Property Tests)
@@ -278,6 +289,7 @@ See: `docs/FALSIFICATION_ENTROMORPH.md`
 - Full adder for all 8 input combinations
 - 8-bit adder for all 65,536 input pairs
 - 2×2 ternary matvec for all 81 weight configurations
+- 4×4 ternary matvec for all 43,046,721 weight configurations
 
 **MEDIUM CONFIDENCE (Tested):**
 - Activations produce reasonable outputs

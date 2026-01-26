@@ -38,7 +38,8 @@ This is research code exploring whether neural computation can be made auditable
 - Logic gates as polynomials (XOR, AND, OR, NOT, NAND, NOR, XNOR)
 - Full adder (8/8 input combinations)
 - 8-bit ripple adder (65,536/65,536 combinations)
-- 2x2 ternary matrix-vector multiply (81/81 weight configurations)
+- 2×2 ternary matrix-vector multiply (81/81 weight configurations)
+- **4×4 ternary matrix-vector multiply (43,046,721/43,046,721 configurations)**
 
 ### Tested (property tests, single platform)
 - Activation functions (ReLU, Sigmoid, Tanh, GELU, SiLU)
@@ -63,7 +64,7 @@ This is research code exploring whether neural computation can be made auditable
 ```bash
 make test      # Run 111 core tests
 make falsify   # Run 38 adversarial tests
-make evolve    # Run 11 evolution tests (proves XOR convergence)
+make prove4x4  # Run 43M exhaustive 4×4 ternary matvec proof (~1 sec)
 make examples
 ./build/hello_ternary
 ```
@@ -75,7 +76,8 @@ make examples
 | Logic gates | Truth tables | **PROVEN** | Exact for binary inputs |
 | Full adder | 8/8 | **PROVEN** | Exhaustive |
 | 8-bit adder | 65,536/65,536 | **PROVEN** | Exhaustive |
-| Ternary 2x2 matvec | 81/81 | **PROVEN** | All 3^4 weight configs |
+| Ternary 2×2 matvec | 81/81 | **PROVEN** | All 3^4 weight configs |
+| Ternary 4×4 matvec | 43,046,721 | **PROVEN** | All 3^16 weight configs |
 | Activations | Properties | **TESTED** | Single platform |
 | Softmax | Properties | **TESTED** | Single platform |
 | MatMul | Spot checks | **TESTED** | Not exhaustive |

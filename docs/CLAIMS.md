@@ -26,10 +26,10 @@ This document tracks every claim made in the yinsen repository and its verificat
 | Activations | - | 6 | - | - |
 | Matrix ops | - | 2 | - | - |
 | CfC | - | 4 | - | 2 |
-| Ternary | 1 | 11 | - | 1 |
+| Ternary | 2 | 11 | - | 1 |
 | Ternary CfC | - | 5 | - | 1 |
 | EntroMorph | - | 8 | **1** | - |
-| **Total** | **10** | **36** | **1** | **4** |
+| **Total** | **11** | **36** | **1** | **4** |
 
 ---
 
@@ -89,6 +89,7 @@ This document tracks every claim made in the yinsen repository and its verificat
 | Trit encoding/decoding is lossless | **TESTED** | Pack/unpack roundtrip test |
 | Ternary dot product matches integer sum | **TESTED** | Property tests |
 | 2x2 ternary matvec is correct | **PROVEN** | 81/81 configurations (all 3^4 weight combos) |
+| 4x4 ternary matvec is correct | **PROVEN** | 43,046,721/43,046,721 configurations (all 3^16 weight combos) |
 | Ternary quantization finds nearest trit | **TESTED** | Boundary tests (-0.6, -0.4, 0.1, 0.6) |
 | Absmean quantization adapts to distribution | **TESTED** | test_absmean_quantize() |
 | 4x memory compression vs int8 | **TESTED** | 8 weights → 2 bytes (4 bits each vs 8 bits) |

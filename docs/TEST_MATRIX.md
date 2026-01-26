@@ -126,6 +126,19 @@ Complete mapping of every test to its target code and verification level.
 |------|----------|----------|--------|
 | All 81 configs | `ternary_matvec` | 81/81 | **PROVEN** |
 
+---
+
+## test_ternary_4x4.c (1 test, 43M verifications)
+
+### 4×4 Matvec - Exhaustive
+
+| Test | Function | Coverage | Status |
+|------|----------|----------|--------|
+| All 43,046,721 configs | `ternary_matvec` | 3^16 | **PROVEN** |
+| Input vector | - | [1,2,3,4] | Fixed |
+| Reference | Float matvec | Exact match | PASS |
+| Time | - | 0.60 sec | 71.4 M/sec |
+
 ### Quantization
 
 | Test | Function | Property | Status |
@@ -276,10 +289,12 @@ Complete mapping of every test to its target code and verification level.
 | test_shapes.c | 44 | 36 | 8 | - | - |
 | test_cfc.c | 6 | - | 6 | - | - |
 | test_ternary.c | 55 | 81* | 55 | - | - |
+| test_ternary_4x4.c | 1 | 43,046,721** | - | - | - |
 | test_cfc_ternary.c | 6 | - | 6 | - | - |
 | test_falsify.c | 38 | - | 34 | - | 4 |
-| test_entromorph.c | 11 | - | 8 | 2** | - |
-| **Total** | **160** | **117** | **117** | **2** | **4** |
+| test_entromorph.c | 11 | - | 8 | 2*** | - |
+| **Total** | **161** | **43,046,839** | **117** | **2** | **4** |
 
 \* 81 2×2 matvec configurations in exhaustive test  
-\** Convergence tests pass but results are meaningless (FALSIFIED)
+\** 43,046,721 4×4 matvec configurations in exhaustive test  
+\*** Convergence tests pass but results are meaningless (FALSIFIED)
