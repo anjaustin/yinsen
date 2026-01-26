@@ -28,6 +28,11 @@ test: $(BUILD_DIR) $(BUILD_DIR)/test_shapes $(BUILD_DIR)/test_cfc $(BUILD_DIR)/t
 	@$(BUILD_DIR)/test_ternary
 	@$(BUILD_DIR)/test_cfc_ternary
 
+# Falsification tests (edge cases, try to break the code)
+falsify: $(BUILD_DIR) $(BUILD_DIR)/test_falsify
+	@echo "Running falsification tests..."
+	@$(BUILD_DIR)/test_falsify
+
 $(BUILD_DIR)/test_shapes: $(TEST_DIR)/test_shapes.c include/apu.h include/onnx_shapes.h
 	$(CC) $(CFLAGS) -o $@ $< $(LDFLAGS)
 
@@ -38,6 +43,9 @@ $(BUILD_DIR)/test_ternary: $(TEST_DIR)/test_ternary.c include/ternary.h
 	$(CC) $(CFLAGS) -o $@ $< $(LDFLAGS)
 
 $(BUILD_DIR)/test_cfc_ternary: $(TEST_DIR)/test_cfc_ternary.c include/cfc_ternary.h include/ternary.h include/onnx_shapes.h
+	$(CC) $(CFLAGS) -o $@ $< $(LDFLAGS)
+
+$(BUILD_DIR)/test_falsify: $(TEST_DIR)/test_falsify.c include/ternary.h include/cfc_ternary.h include/onnx_shapes.h
 	$(CC) $(CFLAGS) -o $@ $< $(LDFLAGS)
 
 # Examples
