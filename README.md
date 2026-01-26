@@ -95,7 +95,7 @@ yinsen/
 │   ├── ternary.h       # Ternary weights {-1,0,+1} (tested)
 │   ├── cfc.h           # CfC cell, float weights (tested)
 │   ├── cfc_ternary.h   # CfC cell, ternary weights (tested)
-│   └── entromorph.h    # Evolution (TESTED - XOR converges)
+│   └── entromorph.h    # Evolution (FALSIFIED - see docs)
 ├── test/
 │   ├── test_shapes.c      # 44 tests
 │   ├── test_cfc.c         # 6 tests
@@ -107,10 +107,14 @@ yinsen/
 │   ├── hello_xor.c
 │   └── hello_ternary.c
 ├── docs/
+│   ├── VERIFICATION.md # Complete verification report
+│   ├── CLAIMS.md       # Claims register with status
+│   ├── TEST_MATRIX.md  # Every test mapped to code
+│   ├── EDGE_CASES.md   # Known behaviors
+│   ├── FALSIFICATION_ENTROMORPH.md  # Why evolution broke
 │   ├── THEORY.md       # Mathematical foundations
 │   ├── API.md          # Function reference
-│   ├── EXAMPLES.md     # Usage guide
-│   └── CLAIMS.md       # Verification claims register
+│   └── EXAMPLES.md     # Usage guide
 └── journal/
     ├── LMM.md          # Research methodology
     ├── scratchpad/     # Active work
@@ -177,10 +181,14 @@ This repo explores:
 
 ## Documentation
 
+- [VERIFICATION.md](docs/VERIFICATION.md) - **Complete verification report**
+- [CLAIMS.md](docs/CLAIMS.md) - Verification claims register
+- [TEST_MATRIX.md](docs/TEST_MATRIX.md) - Every test mapped to code
+- [EDGE_CASES.md](docs/EDGE_CASES.md) - Known behaviors and limitations
+- [FALSIFICATION_ENTROMORPH.md](docs/FALSIFICATION_ENTROMORPH.md) - Why evolution is broken
 - [THEORY.md](docs/THEORY.md) - Mathematical foundations
 - [API.md](docs/API.md) - Function reference  
 - [EXAMPLES.md](docs/EXAMPLES.md) - Usage examples
-- [CLAIMS.md](docs/CLAIMS.md) - Verification claims register
 
 ## Roadmap
 

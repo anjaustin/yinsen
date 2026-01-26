@@ -2,14 +2,34 @@
 
 This document tracks every claim made in the yinsen repository and its verification status.
 
+**Last Updated:** 2026-01-26  
+**Platform:** darwin/arm64  
+**Total Tests:** 149 (111 core + 38 falsification)
+
 ## Verification Levels
 
-| Level | Meaning |
-|-------|---------|
-| **PROVEN** | Exhaustively tested, all cases verified |
-| **TESTED** | Property tests pass on single platform |
-| **UNTESTED** | Code exists but no tests |
-| **HYPOTHESIS** | Conceptual claim, not a testable property |
+| Level | Meaning | Confidence |
+|-------|---------|------------|
+| **PROVEN** | Exhaustively tested, all cases verified | 100% |
+| **TESTED** | Property tests pass on single platform | High |
+| **FALSIFIED** | Attempted to break, found critical failure | DO NOT USE |
+| **KNOWN ISSUE** | Edge case with documented behavior | Use with caution |
+| **UNTESTED** | Code exists but no tests | Unknown |
+| **HYPOTHESIS** | Conceptual claim, not testable | N/A |
+
+## Quick Summary
+
+| Category | PROVEN | TESTED | FALSIFIED | KNOWN |
+|----------|--------|--------|-----------|-------|
+| Logic gates | 7 | - | - | - |
+| Arithmetic | 2 | - | - | - |
+| Activations | - | 6 | - | - |
+| Matrix ops | - | 2 | - | - |
+| CfC | - | 4 | - | 2 |
+| Ternary | 1 | 11 | - | 1 |
+| Ternary CfC | - | 5 | - | 1 |
+| EntroMorph | - | 8 | **1** | - |
+| **Total** | **10** | **36** | **1** | **4** |
 
 ---
 
