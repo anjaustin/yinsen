@@ -21,11 +21,12 @@ $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)
 
 # Tests
-test: $(BUILD_DIR) $(BUILD_DIR)/test_shapes $(BUILD_DIR)/test_cfc $(BUILD_DIR)/test_ternary
+test: $(BUILD_DIR) $(BUILD_DIR)/test_shapes $(BUILD_DIR)/test_cfc $(BUILD_DIR)/test_ternary $(BUILD_DIR)/test_cfc_ternary
 	@echo "Running tests..."
 	@$(BUILD_DIR)/test_shapes
 	@$(BUILD_DIR)/test_cfc
 	@$(BUILD_DIR)/test_ternary
+	@$(BUILD_DIR)/test_cfc_ternary
 
 $(BUILD_DIR)/test_shapes: $(TEST_DIR)/test_shapes.c include/apu.h include/onnx_shapes.h
 	$(CC) $(CFLAGS) -o $@ $< $(LDFLAGS)
@@ -34,6 +35,9 @@ $(BUILD_DIR)/test_cfc: $(TEST_DIR)/test_cfc.c include/cfc.h include/onnx_shapes.
 	$(CC) $(CFLAGS) -o $@ $< $(LDFLAGS)
 
 $(BUILD_DIR)/test_ternary: $(TEST_DIR)/test_ternary.c include/ternary.h
+	$(CC) $(CFLAGS) -o $@ $< $(LDFLAGS)
+
+$(BUILD_DIR)/test_cfc_ternary: $(TEST_DIR)/test_cfc_ternary.c include/cfc_ternary.h include/ternary.h include/onnx_shapes.h
 	$(CC) $(CFLAGS) -o $@ $< $(LDFLAGS)
 
 # Examples
