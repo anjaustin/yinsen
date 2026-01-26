@@ -247,6 +247,272 @@ Returns the memory size in bytes for the CfC parameters.
 
 ---
 
+## ternary.h - 1.58-bit Weight Operations
+
+The core of Yinsen: ternary weights {-1, 0, +1} eliminate multiplication in forward pass.
+
+### Trit Encoding
+
+```c
+#define TRIT_ZERO  0x0  /* 00 - explicit "ignore this input" */
+#define TRIT_POS   0x1  /* 01 - add */
+#define TRIT_NEG   0x3  /* 11 - subtract */
+```
+
+4 trits pack into 1 byte (2 bits each).
+
+### Low-Level Functions
+
+```c
+int8_t trit_unpack(uint8_t packed, int pos)  // Extract trit at position 0-3
+uint8_t trit_encode(int8_t val)               // Encode -1/0/+1 to 2 bits
+uint8_t trit_pack4(int8_t t0, int8_t t1, int8_t t2, int8_t t3)  // Pack 4 trits
+```
+
+### Ternary Dot Product
+
+```c
+float ternary_dot(
+    const uint8_t* w_packed,  // Packed trit weights
+    const float* x,           // Input vector
+    int n                     // Vector length
+)
+```
+
+Computes `y = Σ(x[i] where w[i]=+1) - Σ(x[i] where w[i]=-1)`. No multiplication.
+
+### Ternary Matrix-Vector Multiply
+
+```c
+void ternary_matvec(
+    const uint8_t* W_packed,  // Packed trit matrix [M x N]
+    const float* x,           // Input [N]
+    float* y,                 // Output [M]
+    int M, int N
+)
+
+void ternary_matvec_bias(
+    const uint8_t* W_packed,
+    const float* x,
+    const float* bias,        // Bias [M]
+    float* y,
+    int M, int N
+)
+```
+
+### Quantization Functions
+
+```c
+// Threshold-based quantization
+void ternary_quantize(
+    const float* weights,     // Input float weights
+    uint8_t* packed,          // Output packed trits
+    int n,
+    float threshold           // |w| > threshold -> +/-1
+)
+
+// BitNet b1.58 absmean quantization (recommended)
+void ternary_quantize_absmean(
+    const float* weights,
+    uint8_t* packed,
+    int n
+)
+// Automatically adapts to weight distribution
+
+float ternary_absmean_scale(const float* weights, int n)
+// Returns the absmean scale factor (γ)
+```
+
+### Unpacking
+
+```c
+void ternary_unpack_to_float(
+    const uint8_t* packed,
+    float* weights,           // Output: -1.0, 0.0, or +1.0
+    int n
+)
+```
+
+### Int8 Activation Quantization
+
+For fully integer forward pass (except nonlinearities).
+
+```c
+typedef struct {
+    float scale;
+    int8_t zero_point;  // Always 0 for symmetric
+} TernaryQuantParams;
+
+void ternary_quantize_activations(
+    const float* x,           // Float activations
+    int8_t* x_q,              // Quantized int8 output
+    int n,
+    TernaryQuantParams* params
+)
+
+void ternary_dequantize_activations(
+    const int8_t* x_q,
+    float* x,
+    int n,
+    const TernaryQuantParams* params
+)
+```
+
+### Integer Dot Product
+
+```c
+int32_t ternary_dot_int8(
+    const uint8_t* w_packed,
+    const int8_t* x_q,        // Quantized activations
+    int n
+)
+// Returns int32 accumulator; multiply by scale to get float
+
+void ternary_matvec_int8(
+    const uint8_t* W_packed,
+    const int8_t* x_q,
+    int32_t* y_int,           // Output: int32 accumulators
+    int M, int N
+)
+```
+
+### Memory Utilities
+
+```c
+size_t ternary_bytes(int n)                    // Bytes for n trits
+size_t ternary_matrix_bytes(int M, int N)      // Bytes for M×N matrix
+
+void ternary_memory_stats(
+    int n,
+    size_t* ternary_bytes_out,
+    size_t* float_bytes_out,
+    float* compression_ratio
+)
+```
+
+### Statistics
+
+```c
+typedef struct {
+    int total;
+    int positive;     // Count of +1
+    int negative;     // Count of -1
+    int zeros;        // Count of 0
+    float sparsity;   // zeros / total
+} TernaryStats;
+
+void ternary_stats(const uint8_t* packed, int n, TernaryStats* stats)
+
+int ternary_count_nonzero(const uint8_t* packed, int n)
+int ternary_count_zeros(const uint8_t* packed, int n)
+int ternary_count_positive(const uint8_t* packed, int n)
+int ternary_count_negative(const uint8_t* packed, int n)
+float ternary_sparsity(const uint8_t* packed, int n)
+```
+
+### Energy Estimation
+
+Based on Horowitz 2014 (7nm process).
+
+```c
+float ternary_matvec_energy_pj(int M, int N)   // Ternary path energy
+float float_matvec_energy_pj(int M, int N)     // Float path energy
+float ternary_energy_savings_ratio(int M, int N)  // ~43x typical
+```
+
+---
+
+## cfc_ternary.h - Ternary CfC Networks
+
+CfC with ternary weights. Same update rule, 4-5x less memory.
+
+### Types
+
+```c
+typedef struct {
+    int input_dim;
+    int hidden_dim;
+    const uint8_t* W_gate;    // Packed ternary [hidden_dim, input+hidden]
+    const float* b_gate;      // Bias (still float) [hidden_dim]
+    const uint8_t* W_cand;    // Packed ternary [hidden_dim, input+hidden]
+    const float* b_cand;
+    const float* tau;         // Time constant [hidden_dim] or [1]
+    int tau_shared;
+} CfCTernaryParams;
+
+typedef struct {
+    int hidden_dim;
+    int output_dim;
+    const uint8_t* W_out;     // Packed ternary [output_dim, hidden_dim]
+    const float* b_out;
+} CfCTernaryOutputParams;
+```
+
+### CfC Ternary Cell
+
+```c
+void yinsen_cfc_ternary_cell(
+    const float* x,           // Input [input_dim]
+    const float* h_prev,      // Previous hidden state [hidden_dim]
+    float dt,                 // Time step (>= 0)
+    const CfCTernaryParams* params,
+    float* h_new              // Output [hidden_dim]
+)
+```
+
+Update rule:
+```
+gate = sigmoid(ternary_dot(W_gate, [x; h_prev]) + b_gate)
+candidate = tanh(ternary_dot(W_cand, [x; h_prev]) + b_cand)
+decay = exp(-dt / tau)
+h_new = (1 - gate) * h_prev * decay + gate * candidate
+```
+
+### Output Projection
+
+```c
+void yinsen_cfc_ternary_output(
+    const float* h,
+    const CfCTernaryOutputParams* params,
+    float* output
+)
+
+void yinsen_cfc_ternary_output_softmax(
+    const float* h,
+    const CfCTernaryOutputParams* params,
+    float* probs
+)
+```
+
+### Sequence Processing
+
+```c
+void yinsen_cfc_ternary_forward(
+    const float* inputs,      // [seq_len, input_dim]
+    int seq_len,
+    float dt,
+    const CfCTernaryParams* params,
+    const float* h_init,      // [hidden_dim] or NULL
+    float* outputs,           // [seq_len, hidden_dim]
+    float* h_final            // [hidden_dim] or NULL
+)
+```
+
+### Memory Comparison
+
+```c
+size_t yinsen_cfc_ternary_weight_bytes(const CfCTernaryParams* params)
+
+void yinsen_cfc_ternary_memory_comparison(
+    const CfCTernaryParams* params,
+    size_t* ternary_bytes,
+    size_t* float_bytes,
+    float* ratio              // Typically 4-5x
+)
+```
+
+---
+
 ## entromorph.h - Evolution Engine
 
 ### Types

@@ -70,7 +70,22 @@ This document tracks every claim made in the yinsen repository and its verificat
 | Ternary dot product matches integer sum | **TESTED** | Property tests |
 | 2x2 ternary matvec is correct | **PROVEN** | 81/81 configurations (all 3^4 weight combos) |
 | Ternary quantization finds nearest trit | **TESTED** | Boundary tests (-0.6, -0.4, 0.1, 0.6) |
+| Absmean quantization adapts to distribution | **TESTED** | test_absmean_quantize() |
 | 4x memory compression vs int8 | **TESTED** | 8 weights → 2 bytes (4 bits each vs 8 bits) |
+| Non-multiple-of-4 lengths work correctly | **TESTED** | Lengths 1,2,3,5,6,7 tested |
+| Zero-length inputs return 0 | **TESTED** | test_empty_inputs() |
+| Large values (1e30) quantize correctly | **TESTED** | test_large_values() |
+| Denormal values don't crash | **TESTED** | test_small_values() |
+| Reserved encoding (0b10) treated as 0 | **TESTED** | test_reserved_encoding() |
+| Int8 dot matches float within quant error | **TESTED** | test_int8_dot() |
+| Int32 accumulator safe to 16.9M elements | **TESTED** | Calculated, spot-checked at 1000 |
+
+## Ternary Weights - Known Behaviors
+
+| Behavior | Status | Notes |
+|----------|--------|-------|
+| NaN/Inf inputs propagate | **DOCUMENTED** | Not validated, see EDGE_CASES.md |
+| All-zeros input returns all-zeros output | **TESTED** | Handles gracefully |
 
 ## Ternary CfC (cfc_ternary.h)
 
@@ -78,10 +93,21 @@ This document tracks every claim made in the yinsen repository and its verificat
 |-------|-------|----------|
 | Ternary CfC is deterministic | **TESTED** | Same input → same output |
 | Ternary CfC outputs are bounded | **TESTED** | 100 random inputs bounded |
-| Ternary CfC is numerically stable | **TESTED** | 1,000 iterations without NaN/Inf |
+| Ternary CfC is numerically stable | **TESTED** | 10,000 iterations without NaN/Inf |
 | Ternary CfC output is valid distribution | **TESTED** | Softmax sums to 1.0 |
 | 4.4x memory compression vs float CfC | **TESTED** | 52 bytes vs 228 bytes (measured) |
 | Ternary CfC eliminates multiply in forward pass | **HYPOTHESIS** | Conceptually true, not benchmarked |
+| Zero dt produces finite output | **TESTED** | decay=1, full retention |
+| Large dt (1000) produces finite output | **TESTED** | decay≈0, full update |
+| Tiny tau (1e-10) produces finite output | **TESTED** | decay≈0 |
+| Zero tau produces decay=0 | **TESTED** | exp(-inf)=0, mathematically valid |
+
+## Ternary CfC - Known Behaviors
+
+| Behavior | Status | Notes |
+|----------|--------|-------|
+| Negative dt produces amplification | **DOCUMENTED** | Invalid input, see EDGE_CASES.md |
+| Zero tau produces full update | **DOCUMENTED** | exp(-dt/0)=exp(-inf)=0 |
 
 ## EntroMorph (entromorph.h)
 
@@ -117,5 +143,7 @@ This document tracks every claim made in the yinsen repository and its verificat
 
 ## Changelog
 
+- 2026-01-26: Added falsification test results and edge case documentation
+- 2026-01-26: Added BitNet b1.58 features (absmean, int8, energy estimation)
 - 2026-01-26: Added ternary weights and ternary CfC claims
 - 2026-01-26: Initial claims register created during skeptic review
