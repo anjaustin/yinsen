@@ -62,6 +62,27 @@ This document tracks every claim made in the yinsen repository and its verificat
 | CfC is deterministic across platforms | **UNTESTED** | Only tested on darwin/arm64 |
 | CfC handles irregular dt correctly | **UNTESTED** | No variable-dt tests |
 
+## Ternary Weights (ternary.h)
+
+| Claim | Level | Evidence |
+|-------|-------|----------|
+| Trit encoding/decoding is lossless | **TESTED** | Pack/unpack roundtrip test |
+| Ternary dot product matches integer sum | **TESTED** | Property tests |
+| 2x2 ternary matvec is correct | **PROVEN** | 81/81 configurations (all 3^4 weight combos) |
+| Ternary quantization finds nearest trit | **TESTED** | Boundary tests (-0.6, -0.4, 0.1, 0.6) |
+| 4x memory compression vs int8 | **TESTED** | 8 weights → 2 bytes (4 bits each vs 8 bits) |
+
+## Ternary CfC (cfc_ternary.h)
+
+| Claim | Level | Evidence |
+|-------|-------|----------|
+| Ternary CfC is deterministic | **TESTED** | Same input → same output |
+| Ternary CfC outputs are bounded | **TESTED** | 100 random inputs bounded |
+| Ternary CfC is numerically stable | **TESTED** | 1,000 iterations without NaN/Inf |
+| Ternary CfC output is valid distribution | **TESTED** | Softmax sums to 1.0 |
+| 4.4x memory compression vs float CfC | **TESTED** | 52 bytes vs 228 bytes (measured) |
+| Ternary CfC eliminates multiply in forward pass | **HYPOTHESIS** | Conceptually true, not benchmarked |
+
 ## EntroMorph (entromorph.h)
 
 | Claim | Level | Evidence |
@@ -96,4 +117,5 @@ This document tracks every claim made in the yinsen repository and its verificat
 
 ## Changelog
 
+- 2026-01-26: Added ternary weights and ternary CfC claims
 - 2026-01-26: Initial claims register created during skeptic review

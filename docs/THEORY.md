@@ -96,7 +96,63 @@ The operations in Yinsen can be categorized into primitives:
 - Is this set complete for neural computation? (Unknown - not proven)
 - Is there a formal sense in which these are "primitive"? (No - this is organizational, not mathematical)
 
-## 4. CfC: A Gated Recurrence with Time Constants
+## 4. Ternary Weights: The Core Architectural Choice
+
+### Why Ternary?
+
+The name "TriX" derives from **ternary** weights: constraining all network parameters to {-1, 0, +1}. This isn't a quantization trick—it's a fundamental architectural decision that changes the computational model.
+
+### How Ternary Computation Works
+
+A standard neural network computes dot products:
+```
+y = w₁x₁ + w₂x₂ + w₃x₃ + ... + wₙxₙ
+```
+
+With float weights, this requires n multiplications. With ternary weights:
+```
+y = Σ(xᵢ where wᵢ = +1) - Σ(xᵢ where wᵢ = -1)
+```
+
+The operation becomes **conditional accumulation**: add x if weight is +1, subtract if -1, skip if 0. No multiplication required.
+
+### Memory Representation
+
+A ternary value ("trit") needs only 2 bits:
+- `00` → 0
+- `01` → +1
+- `11` → -1
+
+This gives 4x compression vs int8 and 16x vs float32:
+
+| Format | Bits/weight | 1000 weights |
+|--------|-------------|--------------|
+| float32 | 32 | 4000 bytes |
+| int8 | 8 | 1000 bytes |
+| ternary | 2 | 250 bytes |
+
+### Implications for Verification
+
+Ternary weights enable exhaustive testing at small scales:
+- 2x2 weight matrix: 3⁴ = 81 configurations (all tested)
+- 3x3 weight matrix: 3⁹ = 19,683 configurations (feasible)
+- 4x4 weight matrix: 3¹⁶ ≈ 43M configurations (overnight job)
+
+For large networks, exhaustive testing is impossible. But the discrete nature of ternary weights means:
+- Every weight can be audited by inspection
+- The set of possible networks is finite (though large)
+- Edge cases are enumerable
+
+### Limitations
+
+Ternary weights reduce expressivity:
+- Fine gradients cannot be captured
+- Some functions may require more neurons to approximate
+- Training typically uses gradient estimation techniques
+
+**Status: TESTED** - Ternary primitives verified including exhaustive 2x2 matvec. Ternary CfC cell tested for determinism and stability. No end-to-end network trained yet.
+
+## 5. CfC: A Gated Recurrence with Time Constants
 
 ### What CfC Is
 
@@ -134,21 +190,55 @@ The literature describes CfC as a "closed-form solution" to a continuous-time OD
 
 **Status: TESTED** - Determinism and stability verified on single platform. No comparison to ODE solvers. No benchmark against GRU.
 
-## 5. What's Verified vs. What's Claimed
+## 6. Ternary CfC: Combining Time and Discretization
+
+The ternary CfC cell applies ternary weight constraints to the CfC architecture:
+
+```
+h(t) = (1 - gate) * h_prev * decay + gate * candidate
+```
+
+Where:
+- `gate = sigmoid(ternary_matvec(W_gate, [x; h_prev]) + b_gate)`
+- `candidate = tanh(ternary_matvec(W_cand, [x; h_prev]) + b_cand)`
+- `decay = exp(-dt / tau)`
+
+### Why This Combination?
+
+1. **Temporal modeling**: CfC handles irregular time series via explicit dt
+2. **Auditability**: Ternary weights are inspectable
+3. **Compression**: 4.4x measured memory reduction vs float CfC
+4. **Determinism**: Integer ops in forward pass (except for activations)
+
+### What's Still Float
+
+Activations (sigmoid, tanh, exp) still use floating-point. For full integer/fixed-point operation, these would need lookup tables or polynomial approximations—a future direction.
+
+**Status: TESTED** - Determinism, stability (1000 iterations), bounded outputs verified. 4.4x compression measured. No real task solved yet.
+
+## 7. What's Verified vs. What's Claimed
 
 | Claim | Status | Evidence |
 |-------|--------|----------|
 | Logic polynomials are exact for {0,1} | **PROVEN** | Exhaustive truth tables |
 | Full adder correct | **PROVEN** | 8/8 combinations |
 | 8-bit adder correct | **PROVEN** | 65,536/65,536 combinations |
+| 2x2 ternary matvec correct | **PROVEN** | 81/81 weight configurations |
+| Ternary pack/unpack lossless | **TESTED** | Roundtrip tests |
+| Ternary dot product correct | **TESTED** | Property tests |
+| 4x memory compression | **TESTED** | 8 trits = 2 bytes (vs 8 bytes int8) |
 | Activations correct | **TESTED** | Property tests, single platform |
 | CfC is deterministic | **TESTED** | Same-machine repeatability |
 | CfC is stable | **TESTED** | 10K iterations without divergence |
+| Ternary CfC deterministic | **TESTED** | Same-input same-output |
+| Ternary CfC stable | **TESTED** | 1K iterations without divergence |
+| Ternary CfC 4.4x compression | **TESTED** | 52 bytes vs 228 bytes (measured) |
 | Cross-platform determinism | **UNTESTED** | Claimed, not verified |
 | CfC equivalent to ODE solution | **UNTESTED** | No comparison performed |
+| Ternary sufficient for useful tasks | **UNTESTED** | No benchmark tasks |
 | Primitives are complete/minimal | **HYPOTHESIS** | Organizational, not mathematical |
 
-## 6. Verification Approach
+## 8. Verification Approach
 
 ### Exhaustive Testing
 
@@ -156,6 +246,7 @@ Where feasible, we test every possible input:
 - Logic gates: 4 combinations each (2 × 2)
 - Full adder: 8 combinations (2 × 2 × 2)
 - 8-bit adder: 65,536 combinations (256 × 256)
+- 2x2 ternary matvec: 81 weight configurations (3⁴)
 
 ### Property Testing
 
@@ -163,6 +254,8 @@ For continuous functions, we verify properties:
 - Sigmoid: output in (0, 1), sigmoid(0) = 0.5
 - Softmax: outputs sum to 1, all positive
 - CfC: determinism, bounded outputs, proper decay
+- Ternary CfC: determinism, bounded outputs, stability over time
+- Ternary pack/unpack: roundtrip losslessness
 
 ### What We Don't Test
 
