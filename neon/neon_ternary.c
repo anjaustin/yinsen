@@ -22,6 +22,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <string.h>
+#include <stdlib.h>  // for posix_memalign
 
 /*
  * neon_ternary_matvec_ref - Reference implementation
@@ -1437,4 +1438,510 @@ void neon_i8mm_matvec_blocked16(
 
 #endif  // __ARM_FEATURE_MATMUL_INT8
 
+/* ========================================================================
+ * GHOST-STREAM KERNELS - Non-Temporal Weight Loading
+ * ========================================================================
+ *
+ * The L2 cache is the critical battlefield for MatVec:
+ *   - Activations: "Hot" data, accessed N times, must stay in cache
+ *   - Weights: "Cold" data, accessed once, should NOT pollute cache
+ *
+ * Standard vld1q loads weights into L2, evicting hot activations.
+ * LDNP (Load Pair Non-temporal) bypasses cache allocation:
+ *   DRAM -> Registers -> ALU -> Trash (no L2 residency)
+ *
+ * Combined with Block-12 unrolling to maximize activation reuse:
+ *   - 12 output channels processed per activation load
+ *   - 12 accumulators (v0-v11)
+ *   - 12 weight temps (v16-v27)
+ *   - 4 activation streams or 1 activation vector (v12-v15)
+ *   - Total: ~28 registers (within 32 limit)
+ *
+ * Target: 200+ GOP/s
+ */
+
+#if defined(__ARM_FEATURE_DOTPROD)
+
+/*
+ * pack_weights_ghost12 - Weight layout for Ghost-Stream Block-12 kernel
+ *
+ * For each N-block (12 channels) and K-block (16 elements):
+ *   Store 12 consecutive weight vectors [Ch0..Ch11] for K[0..15]
+ *   Block size: 12 × 16 = 192 bytes
+ *
+ * This layout ensures LDNP can load pairs of weight vectors efficiently.
+ */
+void pack_weights_ghost12(
+    int8_t* __restrict__ packed,
+    const int8_t* __restrict__ weights,
+    int N,  // Must be multiple of 12
+    int K   // Must be multiple of 16
+) {
+    const int K_blocks = K / 16;
+    const int N_blocks = N / 12;
+    const int block_stride = 12 * 16;  // 192 bytes per block
+    
+    for (int nb = 0; nb < N_blocks; nb++) {
+        for (int kb = 0; kb < K_blocks; kb++) {
+            int8_t* dst = packed + (nb * K_blocks + kb) * block_stride;
+            
+            // Pack 12 channels, 16 K-elements each
+            for (int ch = 0; ch < 12; ch++) {
+                int n = nb * 12 + ch;
+                int k_start = kb * 16;
+                
+                for (int kk = 0; kk < 16; kk++) {
+                    dst[ch * 16 + kk] = weights[n * K + k_start + kk];
+                }
+            }
+        }
+    }
+}
+
+/*
+ * neon_ghost12_matvec - Ghost-Stream kernel with LDNP + Block-12
+ *
+ * Uses non-temporal loads (LDNP) for weights to avoid L2 cache pollution.
+ * Processes 12 output channels per iteration for maximum activation reuse.
+ */
+void neon_ghost12_matvec(
+    int32_t* __restrict__ out,
+    const int8_t* __restrict__ act,
+    const int8_t* __restrict__ wgt,  // Ghost-12 layout
+    int N,  // Must be multiple of 12
+    int K   // Must be multiple of 16
+) {
+    const int K_blocks = K / 16;
+    const int block_stride = 12 * 16;  // 192 bytes
+    
+    for (int n = 0; n < N; n += 12) {
+        int nb = n / 12;
+        
+        // 12 accumulators in registers v0-v11
+        int32x4_t acc0, acc1, acc2, acc3, acc4, acc5;
+        int32x4_t acc6, acc7, acc8, acc9, acc10, acc11;
+        
+        // Zero accumulators via inline asm for precise register control
+        __asm__ volatile (
+            "movi v0.4s, #0 \n\t"
+            "movi v1.4s, #0 \n\t"
+            "movi v2.4s, #0 \n\t"
+            "movi v3.4s, #0 \n\t"
+            "movi v4.4s, #0 \n\t"
+            "movi v5.4s, #0 \n\t"
+            "movi v6.4s, #0 \n\t"
+            "movi v7.4s, #0 \n\t"
+            "movi v8.4s, #0 \n\t"
+            "movi v9.4s, #0 \n\t"
+            "movi v10.4s, #0 \n\t"
+            "movi v11.4s, #0 \n\t"
+            : "=w"(acc0), "=w"(acc1), "=w"(acc2), "=w"(acc3),
+              "=w"(acc4), "=w"(acc5), "=w"(acc6), "=w"(acc7),
+              "=w"(acc8), "=w"(acc9), "=w"(acc10), "=w"(acc11)
+            :
+            :
+        );
+        
+        const int8_t* a_ptr = act;
+        const int8_t* w_base = wgt + nb * K_blocks * block_stride;
+        
+        for (int kb = 0; kb < K_blocks; kb++) {
+            const int8_t* w_block = w_base + kb * block_stride;
+            
+            // Load 16 activations (standard load - keep in cache)
+            int8x16_t a_vec;
+            __asm__ volatile (
+                "ldr q12, [%[a]], #16 \n\t"
+                : [a] "+r"(a_ptr), "=w"(a_vec)
+                :
+                : "memory"
+            );
+            
+            // Ghost-load weights with LDNP (non-temporal) and fire SDOT
+            // LDNP loads 2 × 16 bytes = 32 bytes (2 weight vectors)
+            // LDNP does NOT support post-increment, use explicit offsets
+            __asm__ volatile (
+                // Load weights for Ch0-Ch1 (non-temporal), SDOT
+                "ldnp q16, q17, [%[w]] \n\t"
+                "sdot v0.4s, v12.16b, v16.16b \n\t"
+                "sdot v1.4s, v12.16b, v17.16b \n\t"
+                
+                // Ch2-Ch3
+                "ldnp q18, q19, [%[w], #32] \n\t"
+                "sdot v2.4s, v12.16b, v18.16b \n\t"
+                "sdot v3.4s, v12.16b, v19.16b \n\t"
+                
+                // Ch4-Ch5
+                "ldnp q20, q21, [%[w], #64] \n\t"
+                "sdot v4.4s, v12.16b, v20.16b \n\t"
+                "sdot v5.4s, v12.16b, v21.16b \n\t"
+                
+                // Ch6-Ch7
+                "ldnp q22, q23, [%[w], #96] \n\t"
+                "sdot v6.4s, v12.16b, v22.16b \n\t"
+                "sdot v7.4s, v12.16b, v23.16b \n\t"
+                
+                // Ch8-Ch9
+                "ldnp q24, q25, [%[w], #128] \n\t"
+                "sdot v8.4s, v12.16b, v24.16b \n\t"
+                "sdot v9.4s, v12.16b, v25.16b \n\t"
+                
+                // Ch10-Ch11
+                "ldnp q26, q27, [%[w], #160] \n\t"
+                "sdot v10.4s, v12.16b, v26.16b \n\t"
+                "sdot v11.4s, v12.16b, v27.16b \n\t"
+                
+                : "+w"(acc0), "+w"(acc1), "+w"(acc2), "+w"(acc3),
+                  "+w"(acc4), "+w"(acc5), "+w"(acc6), "+w"(acc7),
+                  "+w"(acc8), "+w"(acc9), "+w"(acc10), "+w"(acc11)
+                : [w] "r"(w_block), "w"(a_vec)
+                : "v16", "v17", "v18", "v19", "v20", "v21",
+                  "v22", "v23", "v24", "v25", "v26", "v27", "memory"
+            );
+        }
+        
+        // Horizontal reduction and store
+        out[n + 0] = vaddvq_s32(acc0);
+        out[n + 1] = vaddvq_s32(acc1);
+        out[n + 2] = vaddvq_s32(acc2);
+        out[n + 3] = vaddvq_s32(acc3);
+        out[n + 4] = vaddvq_s32(acc4);
+        out[n + 5] = vaddvq_s32(acc5);
+        out[n + 6] = vaddvq_s32(acc6);
+        out[n + 7] = vaddvq_s32(acc7);
+        out[n + 8] = vaddvq_s32(acc8);
+        out[n + 9] = vaddvq_s32(acc9);
+        out[n + 10] = vaddvq_s32(acc10);
+        out[n + 11] = vaddvq_s32(acc11);
+    }
+}
+
+/*
+ * neon_ghost12_matvec_v2 - Simplified version without complex asm constraints
+ *
+ * Uses LDNP via inline asm but lets compiler handle register allocation
+ * for accumulators.
+ */
+void neon_ghost12_matvec_v2(
+    int32_t* __restrict__ out,
+    const int8_t* __restrict__ act,
+    const int8_t* __restrict__ wgt,  // Ghost-12 layout
+    int N,  // Must be multiple of 12
+    int K   // Must be multiple of 16
+) {
+    const int K_blocks = K / 16;
+    const int block_stride = 12 * 16;
+    
+    for (int n = 0; n < N; n += 12) {
+        int nb = n / 12;
+        
+        // Accumulators (compiler will allocate registers)
+        int32x4_t acc0 = vdupq_n_s32(0);
+        int32x4_t acc1 = vdupq_n_s32(0);
+        int32x4_t acc2 = vdupq_n_s32(0);
+        int32x4_t acc3 = vdupq_n_s32(0);
+        int32x4_t acc4 = vdupq_n_s32(0);
+        int32x4_t acc5 = vdupq_n_s32(0);
+        int32x4_t acc6 = vdupq_n_s32(0);
+        int32x4_t acc7 = vdupq_n_s32(0);
+        int32x4_t acc8 = vdupq_n_s32(0);
+        int32x4_t acc9 = vdupq_n_s32(0);
+        int32x4_t acc10 = vdupq_n_s32(0);
+        int32x4_t acc11 = vdupq_n_s32(0);
+        
+        const int8_t* a_ptr = act;
+        const int8_t* w_base = wgt + nb * K_blocks * block_stride;
+        
+        for (int kb = 0; kb < K_blocks; kb++) {
+            const int8_t* w_ptr = w_base + kb * block_stride;
+            
+            // Standard activation load (keep in cache)
+            int8x16_t a = vld1q_s8(a_ptr);
+            a_ptr += 16;
+            
+            // Non-temporal weight loads using inline asm
+            // LDNP does NOT support post-increment, use explicit offsets
+            int8x16_t w0, w1, w2, w3, w4, w5, w6, w7, w8, w9, w10, w11;
+            
+            __asm__ volatile (
+                "ldnp %q[w0], %q[w1], [%[ptr]] \n\t"
+                "ldnp %q[w2], %q[w3], [%[ptr], #32] \n\t"
+                "ldnp %q[w4], %q[w5], [%[ptr], #64] \n\t"
+                "ldnp %q[w6], %q[w7], [%[ptr], #96] \n\t"
+                "ldnp %q[w8], %q[w9], [%[ptr], #128] \n\t"
+                "ldnp %q[w10], %q[w11], [%[ptr], #160] \n\t"
+                : [w0] "=w"(w0), [w1] "=w"(w1), [w2] "=w"(w2), [w3] "=w"(w3),
+                  [w4] "=w"(w4), [w5] "=w"(w5), [w6] "=w"(w6), [w7] "=w"(w7),
+                  [w8] "=w"(w8), [w9] "=w"(w9), [w10] "=w"(w10), [w11] "=w"(w11)
+                : [ptr] "r"(w_ptr)
+                : "memory"
+            );
+            
+            // SDOT for all 12 channels
+            acc0 = vdotq_s32(acc0, w0, a);
+            acc1 = vdotq_s32(acc1, w1, a);
+            acc2 = vdotq_s32(acc2, w2, a);
+            acc3 = vdotq_s32(acc3, w3, a);
+            acc4 = vdotq_s32(acc4, w4, a);
+            acc5 = vdotq_s32(acc5, w5, a);
+            acc6 = vdotq_s32(acc6, w6, a);
+            acc7 = vdotq_s32(acc7, w7, a);
+            acc8 = vdotq_s32(acc8, w8, a);
+            acc9 = vdotq_s32(acc9, w9, a);
+            acc10 = vdotq_s32(acc10, w10, a);
+            acc11 = vdotq_s32(acc11, w11, a);
+        }
+        
+        out[n + 0] = vaddvq_s32(acc0);
+        out[n + 1] = vaddvq_s32(acc1);
+        out[n + 2] = vaddvq_s32(acc2);
+        out[n + 3] = vaddvq_s32(acc3);
+        out[n + 4] = vaddvq_s32(acc4);
+        out[n + 5] = vaddvq_s32(acc5);
+        out[n + 6] = vaddvq_s32(acc6);
+        out[n + 7] = vaddvq_s32(acc7);
+        out[n + 8] = vaddvq_s32(acc8);
+        out[n + 9] = vaddvq_s32(acc9);
+        out[n + 10] = vaddvq_s32(acc10);
+        out[n + 11] = vaddvq_s32(acc11);
+    }
+}
+
+/*
+ * neon_ghost12_matvec_ldr - Same as v2 but with standard LDR (temporal) loads
+ *
+ * This is a control to compare LDNP vs LDR performance.
+ */
+void neon_ghost12_matvec_ldr(
+    int32_t* __restrict__ out,
+    const int8_t* __restrict__ act,
+    const int8_t* __restrict__ wgt,  // Ghost-12 layout
+    int N,  // Must be multiple of 12
+    int K   // Must be multiple of 16
+) {
+    const int K_blocks = K / 16;
+    const int block_stride = 12 * 16;
+    
+    for (int n = 0; n < N; n += 12) {
+        int nb = n / 12;
+        
+        int32x4_t acc0 = vdupq_n_s32(0);
+        int32x4_t acc1 = vdupq_n_s32(0);
+        int32x4_t acc2 = vdupq_n_s32(0);
+        int32x4_t acc3 = vdupq_n_s32(0);
+        int32x4_t acc4 = vdupq_n_s32(0);
+        int32x4_t acc5 = vdupq_n_s32(0);
+        int32x4_t acc6 = vdupq_n_s32(0);
+        int32x4_t acc7 = vdupq_n_s32(0);
+        int32x4_t acc8 = vdupq_n_s32(0);
+        int32x4_t acc9 = vdupq_n_s32(0);
+        int32x4_t acc10 = vdupq_n_s32(0);
+        int32x4_t acc11 = vdupq_n_s32(0);
+        
+        const int8_t* a_ptr = act;
+        const int8_t* w_base = wgt + nb * K_blocks * block_stride;
+        
+        for (int kb = 0; kb < K_blocks; kb++) {
+            const int8_t* w_ptr = w_base + kb * block_stride;
+            
+            int8x16_t a = vld1q_s8(a_ptr);
+            a_ptr += 16;
+            
+            // Standard temporal loads
+            int8x16_t w0 = vld1q_s8(w_ptr);
+            int8x16_t w1 = vld1q_s8(w_ptr + 16);
+            int8x16_t w2 = vld1q_s8(w_ptr + 32);
+            int8x16_t w3 = vld1q_s8(w_ptr + 48);
+            int8x16_t w4 = vld1q_s8(w_ptr + 64);
+            int8x16_t w5 = vld1q_s8(w_ptr + 80);
+            int8x16_t w6 = vld1q_s8(w_ptr + 96);
+            int8x16_t w7 = vld1q_s8(w_ptr + 112);
+            int8x16_t w8 = vld1q_s8(w_ptr + 128);
+            int8x16_t w9 = vld1q_s8(w_ptr + 144);
+            int8x16_t w10 = vld1q_s8(w_ptr + 160);
+            int8x16_t w11 = vld1q_s8(w_ptr + 176);
+            
+            acc0 = vdotq_s32(acc0, w0, a);
+            acc1 = vdotq_s32(acc1, w1, a);
+            acc2 = vdotq_s32(acc2, w2, a);
+            acc3 = vdotq_s32(acc3, w3, a);
+            acc4 = vdotq_s32(acc4, w4, a);
+            acc5 = vdotq_s32(acc5, w5, a);
+            acc6 = vdotq_s32(acc6, w6, a);
+            acc7 = vdotq_s32(acc7, w7, a);
+            acc8 = vdotq_s32(acc8, w8, a);
+            acc9 = vdotq_s32(acc9, w9, a);
+            acc10 = vdotq_s32(acc10, w10, a);
+            acc11 = vdotq_s32(acc11, w11, a);
+        }
+        
+        out[n + 0] = vaddvq_s32(acc0);
+        out[n + 1] = vaddvq_s32(acc1);
+        out[n + 2] = vaddvq_s32(acc2);
+        out[n + 3] = vaddvq_s32(acc3);
+        out[n + 4] = vaddvq_s32(acc4);
+        out[n + 5] = vaddvq_s32(acc5);
+        out[n + 6] = vaddvq_s32(acc6);
+        out[n + 7] = vaddvq_s32(acc7);
+        out[n + 8] = vaddvq_s32(acc8);
+        out[n + 9] = vaddvq_s32(acc9);
+        out[n + 10] = vaddvq_s32(acc10);
+        out[n + 11] = vaddvq_s32(acc11);
+    }
+}
+
+/*
+ * pack_weights_block16 - Weight layout for Block-16 kernel
+ *
+ * 16 output channels × 16 K-elements = 256 bytes per block
+ */
+void pack_weights_block16(
+    int8_t* __restrict__ packed,
+    const int8_t* __restrict__ weights,
+    int N,  // Must be multiple of 16
+    int K   // Must be multiple of 16
+) {
+    const int K_blocks = K / 16;
+    const int N_blocks = N / 16;
+    const int block_stride = 16 * 16;  // 256 bytes
+    
+    for (int nb = 0; nb < N_blocks; nb++) {
+        for (int kb = 0; kb < K_blocks; kb++) {
+            int8_t* dst = packed + (nb * K_blocks + kb) * block_stride;
+            
+            for (int ch = 0; ch < 16; ch++) {
+                int n = nb * 16 + ch;
+                int k_start = kb * 16;
+                
+                for (int kk = 0; kk < 16; kk++) {
+                    dst[ch * 16 + kk] = weights[n * K + k_start + kk];
+                }
+            }
+        }
+    }
+}
+
+/*
+ * neon_block16_matvec - Block-16 kernel maximizing register usage
+ *
+ * Uses all 32 registers:
+ *   - 16 accumulators (v0-v15)
+ *   - 1 activation (v16)
+ *   - 15 temps for weights (loaded in batches)
+ */
+void neon_block16_matvec(
+    int32_t* __restrict__ out,
+    const int8_t* __restrict__ act,
+    const int8_t* __restrict__ wgt,  // Block-16 layout
+    int N,  // Must be multiple of 16
+    int K   // Must be multiple of 16
+) {
+    const int K_blocks = K / 16;
+    const int block_stride = 16 * 16;
+    
+    for (int n = 0; n < N; n += 16) {
+        int nb = n / 16;
+        
+        // 16 accumulators - max practical limit
+        int32x4_t acc0 = vdupq_n_s32(0);
+        int32x4_t acc1 = vdupq_n_s32(0);
+        int32x4_t acc2 = vdupq_n_s32(0);
+        int32x4_t acc3 = vdupq_n_s32(0);
+        int32x4_t acc4 = vdupq_n_s32(0);
+        int32x4_t acc5 = vdupq_n_s32(0);
+        int32x4_t acc6 = vdupq_n_s32(0);
+        int32x4_t acc7 = vdupq_n_s32(0);
+        int32x4_t acc8 = vdupq_n_s32(0);
+        int32x4_t acc9 = vdupq_n_s32(0);
+        int32x4_t acc10 = vdupq_n_s32(0);
+        int32x4_t acc11 = vdupq_n_s32(0);
+        int32x4_t acc12 = vdupq_n_s32(0);
+        int32x4_t acc13 = vdupq_n_s32(0);
+        int32x4_t acc14 = vdupq_n_s32(0);
+        int32x4_t acc15 = vdupq_n_s32(0);
+        
+        const int8_t* a_ptr = act;
+        const int8_t* w_base = wgt + nb * K_blocks * block_stride;
+        
+        for (int kb = 0; kb < K_blocks; kb++) {
+            const int8_t* w_ptr = w_base + kb * block_stride;
+            
+            // Prefetch next block
+            if (kb + 1 < K_blocks) {
+                __builtin_prefetch(a_ptr + 16, 0, 3);
+                __builtin_prefetch(w_base + (kb + 1) * block_stride, 0, 3);
+                __builtin_prefetch(w_base + (kb + 1) * block_stride + 128, 0, 3);
+            }
+            
+            int8x16_t a = vld1q_s8(a_ptr);
+            a_ptr += 16;
+            
+            // Load all 16 weight vectors
+            int8x16_t w0 = vld1q_s8(w_ptr);
+            int8x16_t w1 = vld1q_s8(w_ptr + 16);
+            int8x16_t w2 = vld1q_s8(w_ptr + 32);
+            int8x16_t w3 = vld1q_s8(w_ptr + 48);
+            int8x16_t w4 = vld1q_s8(w_ptr + 64);
+            int8x16_t w5 = vld1q_s8(w_ptr + 80);
+            int8x16_t w6 = vld1q_s8(w_ptr + 96);
+            int8x16_t w7 = vld1q_s8(w_ptr + 112);
+            int8x16_t w8 = vld1q_s8(w_ptr + 128);
+            int8x16_t w9 = vld1q_s8(w_ptr + 144);
+            int8x16_t w10 = vld1q_s8(w_ptr + 160);
+            int8x16_t w11 = vld1q_s8(w_ptr + 176);
+            int8x16_t w12 = vld1q_s8(w_ptr + 192);
+            int8x16_t w13 = vld1q_s8(w_ptr + 208);
+            int8x16_t w14 = vld1q_s8(w_ptr + 224);
+            int8x16_t w15 = vld1q_s8(w_ptr + 240);
+            
+            // SDOT all 16 channels
+            acc0 = vdotq_s32(acc0, w0, a);
+            acc1 = vdotq_s32(acc1, w1, a);
+            acc2 = vdotq_s32(acc2, w2, a);
+            acc3 = vdotq_s32(acc3, w3, a);
+            acc4 = vdotq_s32(acc4, w4, a);
+            acc5 = vdotq_s32(acc5, w5, a);
+            acc6 = vdotq_s32(acc6, w6, a);
+            acc7 = vdotq_s32(acc7, w7, a);
+            acc8 = vdotq_s32(acc8, w8, a);
+            acc9 = vdotq_s32(acc9, w9, a);
+            acc10 = vdotq_s32(acc10, w10, a);
+            acc11 = vdotq_s32(acc11, w11, a);
+            acc12 = vdotq_s32(acc12, w12, a);
+            acc13 = vdotq_s32(acc13, w13, a);
+            acc14 = vdotq_s32(acc14, w14, a);
+            acc15 = vdotq_s32(acc15, w15, a);
+        }
+        
+        out[n + 0] = vaddvq_s32(acc0);
+        out[n + 1] = vaddvq_s32(acc1);
+        out[n + 2] = vaddvq_s32(acc2);
+        out[n + 3] = vaddvq_s32(acc3);
+        out[n + 4] = vaddvq_s32(acc4);
+        out[n + 5] = vaddvq_s32(acc5);
+        out[n + 6] = vaddvq_s32(acc6);
+        out[n + 7] = vaddvq_s32(acc7);
+        out[n + 8] = vaddvq_s32(acc8);
+        out[n + 9] = vaddvq_s32(acc9);
+        out[n + 10] = vaddvq_s32(acc10);
+        out[n + 11] = vaddvq_s32(acc11);
+        out[n + 12] = vaddvq_s32(acc12);
+        out[n + 13] = vaddvq_s32(acc13);
+        out[n + 14] = vaddvq_s32(acc14);
+        out[n + 15] = vaddvq_s32(acc15);
+    }
+}
+
+/*
+ * Aligned memory allocation helper for huge pages (16KB alignment)
+ */
+void* alloc_aligned_16k(size_t size) {
+    void* ptr = NULL;
+    if (posix_memalign(&ptr, 16384, size) != 0) {
+        return NULL;
+    }
+    return ptr;
+}
+
+#endif  // __ARM_FEATURE_DOTPROD
 

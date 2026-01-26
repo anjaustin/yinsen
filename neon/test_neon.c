@@ -44,6 +44,21 @@ extern void neon_int8_matvec_blocked8_k32(
     int32_t* out, const int8_t* act, const int8_t* wgt, int N, int K);
 extern void neon_int8_matvec_blocked8_k64(
     int32_t* out, const int8_t* act, const int8_t* wgt, int N, int K);
+
+// Ghost-Stream kernels (LDNP + Block-12)
+extern void pack_weights_ghost12(
+    int8_t* packed, const int8_t* weights, int N, int K);
+extern void neon_ghost12_matvec(
+    int32_t* out, const int8_t* act, const int8_t* wgt, int N, int K);
+extern void neon_ghost12_matvec_v2(
+    int32_t* out, const int8_t* act, const int8_t* wgt, int N, int K);
+extern void neon_ghost12_matvec_ldr(
+    int32_t* out, const int8_t* act, const int8_t* wgt, int N, int K);
+extern void pack_weights_block16(
+    int8_t* packed, const int8_t* weights, int N, int K);
+extern void neon_block16_matvec(
+    int32_t* out, const int8_t* act, const int8_t* wgt, int N, int K);
+extern void* alloc_aligned_16k(size_t size);
 #endif
 
 // I8MM kernels (ARMv8.6 SMMLA)
@@ -649,6 +664,151 @@ int main(void) {
     free(out_i8mm_b8);
     free(out_i8mm_b16);
 #endif
+
+    // ========== GHOST-STREAM (LDNP + Block-12) ==========
+    // N=4096 is divisible by 12? 4096/12 = 341.33, no!
+    // Use N=4092 (divisible by 12) for ghost test
+    const int N_ghost = (N / 12) * 12;  // Round down to multiple of 12
+    
+    if (N_ghost >= 12) {
+        printf("\n--- Ghost-Stream (LDNP Non-Temporal + Block-12) ---\n");
+        printf("  Testing with N=%d (rounded from %d)\n", N_ghost, N);
+        
+        // Use 16KB aligned allocation for weights
+        int8_t* weights_ghost = (int8_t*)alloc_aligned_16k(N_ghost * K);
+        if (!weights_ghost) {
+            printf("  Failed to allocate aligned memory\n");
+        } else {
+            pack_weights_ghost12(weights_ghost, weights, N_ghost, K);
+            
+            // Compute reference
+            int32_t* out_ghost_ref = malloc(N_ghost * sizeof(int32_t));
+            for (int n = 0; n < N_ghost; n++) {
+                int32_t acc = 0;
+                for (int k = 0; k < K; k++) {
+                    acc += (int32_t)act[k] * (int32_t)weights[n * K + k];
+                }
+                out_ghost_ref[n] = acc;
+            }
+            
+            // Test v2 kernel (simpler asm)
+            int32_t* out_ghost_v2 = malloc(N_ghost * sizeof(int32_t));
+            memset(out_ghost_v2, 0, N_ghost * sizeof(int32_t));
+            neon_ghost12_matvec_v2(out_ghost_v2, act, weights_ghost, N_ghost, K);
+            
+            int ghost_v2_errors = 0;
+            for (int i = 0; i < N_ghost; i++) {
+                if (out_ghost_ref[i] != out_ghost_v2[i]) {
+                    ghost_v2_errors++;
+                    if (ghost_v2_errors <= 5) {
+                        printf("  Ghost v2 mismatch [%d]: ref=%d, ghost=%d\n",
+                               i, out_ghost_ref[i], out_ghost_v2[i]);
+                    }
+                }
+            }
+            if (ghost_v2_errors == 0) {
+                printf("Ghost-12 v2 verification: PASSED\n");
+            } else {
+                printf("Ghost-12 v2 verification: FAILED (%d errors)\n", ghost_v2_errors);
+            }
+            
+            // Benchmark Ghost v2
+            double ghost_ops = 2.0 * N_ghost * K;
+            t0 = get_time_ns();
+            for (int i = 0; i < iters; i++) {
+                neon_ghost12_matvec_v2(out_ghost_v2, act, weights_ghost, N_ghost, K);
+            }
+            t1 = get_time_ns();
+            double ghost_v2_ns = (double)(t1 - t0) / iters;
+            double ghost_v2_gops = ghost_ops / ghost_v2_ns;
+            
+            // Benchmark Ghost LDR (temporal loads, no asm) for comparison
+            t0 = get_time_ns();
+            for (int i = 0; i < iters; i++) {
+                neon_ghost12_matvec_ldr(out_ghost_v2, act, weights_ghost, N_ghost, K);
+            }
+            t1 = get_time_ns();
+            double ghost_ldr_ns = (double)(t1 - t0) / iters;
+            double ghost_ldr_gops = ghost_ops / ghost_ldr_ns;
+            
+            printf("  Ghost-12 LDNP: %.1f us (%.2f GOP/s)\n", ghost_v2_ns / 1000, ghost_v2_gops);
+            printf("  Ghost-12 LDR:  %.1f us (%.2f GOP/s)\n", ghost_ldr_ns / 1000, ghost_ldr_gops);
+            printf("  LDNP vs LDR: %.2fx\n", ghost_v2_gops / ghost_ldr_gops);
+            printf("  vs SDOT best: %.2fx\n", ghost_ldr_gops / best_sdot_gops);
+            
+            // Bandwidth
+            double ghost_bytes = (double)(N_ghost * K);
+            double ghost_bw = ghost_bytes / ghost_ldr_ns;
+            printf("  Bandwidth (Ghost): %.1f GB/s\n", ghost_bw);
+            
+            double best_ghost = (ghost_v2_gops > ghost_ldr_gops) ? ghost_v2_gops : ghost_ldr_gops;
+            if (best_ghost > best_gops) best_gops = best_ghost;
+            
+            free(weights_ghost);
+            free(out_ghost_ref);
+            free(out_ghost_v2);
+        }
+    }
+    
+    // ========== BLOCK-16 (Maximum register utilization) ==========
+    printf("\n--- Block-16 (16 OC × 16 K) ---\n");
+    
+    int8_t* weights_b16 = (int8_t*)alloc_aligned_16k(N * K);
+    if (weights_b16) {
+        pack_weights_block16(weights_b16, weights, N, K);
+        
+        // Compute reference
+        int32_t* out_b16_ref = malloc(N * sizeof(int32_t));
+        for (int n = 0; n < N; n++) {
+            int32_t acc = 0;
+            for (int k = 0; k < K; k++) {
+                acc += (int32_t)act[k] * (int32_t)weights[n * K + k];
+            }
+            out_b16_ref[n] = acc;
+        }
+        
+        // Test Block-16 kernel
+        int32_t* out_b16 = malloc(N * sizeof(int32_t));
+        memset(out_b16, 0, N * sizeof(int32_t));
+        neon_block16_matvec(out_b16, act, weights_b16, N, K);
+        
+        int b16_errors = 0;
+        for (int i = 0; i < N; i++) {
+            if (out_b16_ref[i] != out_b16[i]) {
+                b16_errors++;
+                if (b16_errors <= 5) {
+                    printf("  Block-16 mismatch [%d]: ref=%d, b16=%d\n",
+                           i, out_b16_ref[i], out_b16[i]);
+                }
+            }
+        }
+        if (b16_errors == 0) {
+            printf("Block-16 verification: PASSED\n");
+        } else {
+            printf("Block-16 verification: FAILED (%d errors)\n", b16_errors);
+        }
+        
+        // Benchmark Block-16
+        t0 = get_time_ns();
+        for (int i = 0; i < iters; i++) {
+            neon_block16_matvec(out_b16, act, weights_b16, N, K);
+        }
+        t1 = get_time_ns();
+        double b16_ns = (double)(t1 - t0) / iters;
+        double b16_gops = ops / b16_ns;
+        
+        printf("  Block-16:  %.1f us (%.2f GOP/s)\n", b16_ns / 1000, b16_gops);
+        printf("  vs SDOT best: %.2fx\n", b16_gops / best_sdot_gops);
+        
+        double b16_bw = (double)(N * K) / b16_ns;
+        printf("  Bandwidth: %.1f GB/s\n", b16_bw);
+        
+        if (b16_gops > best_gops) best_gops = b16_gops;
+        
+        free(weights_b16);
+        free(out_b16_ref);
+        free(out_b16);
+    }
     
     // Estimate for 7B model
     printf("\n7B Model Estimate:\n");
