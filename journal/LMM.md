@@ -223,17 +223,20 @@ journal/scratchpad/[project]_synth.md      # Phase 4
 
 Keep exploration files in-repo so the cognitive journey is preserved and searchable.
 
-### When to Archive
+### Retention Policy
+
+**We never delete anything.**
+
+This is research for legitimate organizations. Every exploration, dead end, and failed approach is part of the auditable record. The cognitive journey is as important as the destination.
 
 Once synthesis is complete:
 - Move finished explorations to `journal/archive/[project]/`
-- Or delete if the journey wasn't valuable
+- Date-prefix if needed: `YYYY-MM-DD_[project]_raw.md`
 
-### When to Keep in Scratchpad
+### Scratchpad vs Archive
 
-- Active exploration in progress
-- Might revisit the problem soon
-- Want quick access during implementation
+**Scratchpad:** Active work in progress
+**Archive:** Completed explorations (successful or not)
 
 ---
 
