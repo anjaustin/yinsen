@@ -46,6 +46,24 @@ extern void neon_int8_matvec_blocked8_k64(
     int32_t* out, const int8_t* act, const int8_t* wgt, int N, int K);
 #endif
 
+// I8MM kernels (ARMv8.6 SMMLA)
+#if defined(__ARM_FEATURE_MATMUL_INT8)
+extern void pack_weights_i8mm_paired(
+    int8_t* packed, const int8_t* weights, int N, int K);
+extern void pack_weights_i8mm_blocked8(
+    int8_t* packed, const int8_t* weights, int N, int K);
+extern void neon_i8mm_matvec_2oc(
+    int32_t* out, const int8_t* act, const int8_t* wgt, int N, int K);
+extern void neon_i8mm_matvec_8oc(
+    int32_t* out, const int8_t* act, const int8_t* wgt, int N, int K);
+extern void neon_i8mm_matvec_blocked8(
+    int32_t* out, const int8_t* act, const int8_t* wgt, int N, int K);
+extern void pack_weights_i8mm_blocked16(
+    int8_t* packed, const int8_t* weights, int N, int K);
+extern void neon_i8mm_matvec_blocked16(
+    int32_t* out, const int8_t* act, const int8_t* wgt, int N, int K);
+#endif
+
 extern void pack_weights_blocked8(
     uint8_t* packed, const int8_t* weights, int N, int K);
 
@@ -454,13 +472,182 @@ int main(void) {
     free(out_int8_k32);
     free(out_int8_k64);
     
-    // Use best result for estimate
-    double best_gops = k64_gops;
-    if (k32_gops > best_gops) best_gops = k32_gops;
-    if (int8_b8_gops > best_gops) best_gops = int8_b8_gops;
-    if (b8_gops > best_gops) best_gops = b8_gops;
-#else
-    double best_gops = neon_gops;
+    // Use best SDOT result
+    double best_sdot_gops = k64_gops;
+    if (k32_gops > best_sdot_gops) best_sdot_gops = k32_gops;
+    if (int8_b8_gops > best_sdot_gops) best_sdot_gops = int8_b8_gops;
+    if (b8_gops > best_sdot_gops) best_sdot_gops = b8_gops;
+    
+    double best_gops = best_sdot_gops;
+#endif
+
+#if defined(__ARM_FEATURE_MATMUL_INT8)
+    // ========== I8MM "MICRO-TENSOR ENGINE" ==========
+    printf("\n--- I8MM Micro-Tensor Engine (SMMLA) ---\n");
+    
+    // Pack weights for I8MM (pair-interleaved)
+    int8_t* weights_i8mm = malloc(N * K);
+    pack_weights_i8mm_paired(weights_i8mm, weights, N, K);
+    
+    // Compute reference (reuse from above or recompute)
+    int32_t* out_i8mm_ref = malloc(N * sizeof(int32_t));
+    for (int n = 0; n < N; n++) {
+        int32_t acc = 0;
+        for (int k = 0; k < K; k++) {
+            acc += (int32_t)act[k] * (int32_t)weights[n * K + k];
+        }
+        out_i8mm_ref[n] = acc;
+    }
+    
+    // Test I8MM 2OC kernel
+    int32_t* out_i8mm_2oc = malloc(N * sizeof(int32_t));
+    memset(out_i8mm_2oc, 0, N * sizeof(int32_t));
+    neon_i8mm_matvec_2oc(out_i8mm_2oc, act, weights_i8mm, N, K);
+    
+    int i8mm_2oc_errors = 0;
+    for (int i = 0; i < N; i++) {
+        if (out_i8mm_ref[i] != out_i8mm_2oc[i]) {
+            i8mm_2oc_errors++;
+            if (i8mm_2oc_errors <= 5) {
+                printf("  I8MM 2OC mismatch [%d]: ref=%d, i8mm=%d\n",
+                       i, out_i8mm_ref[i], out_i8mm_2oc[i]);
+            }
+        }
+    }
+    if (i8mm_2oc_errors == 0) {
+        printf("I8MM 2OC verification: PASSED\n");
+    } else {
+        printf("I8MM 2OC verification: FAILED (%d errors)\n", i8mm_2oc_errors);
+    }
+    
+    // Test I8MM 8OC kernel
+    int32_t* out_i8mm_8oc = malloc(N * sizeof(int32_t));
+    memset(out_i8mm_8oc, 0, N * sizeof(int32_t));
+    neon_i8mm_matvec_8oc(out_i8mm_8oc, act, weights_i8mm, N, K);
+    
+    int i8mm_8oc_errors = 0;
+    for (int i = 0; i < N; i++) {
+        if (out_i8mm_ref[i] != out_i8mm_8oc[i]) {
+            i8mm_8oc_errors++;
+            if (i8mm_8oc_errors <= 5) {
+                printf("  I8MM 8OC mismatch [%d]: ref=%d, i8mm=%d\n",
+                       i, out_i8mm_ref[i], out_i8mm_8oc[i]);
+            }
+        }
+    }
+    if (i8mm_8oc_errors == 0) {
+        printf("I8MM 8OC verification: PASSED\n");
+    } else {
+        printf("I8MM 8OC verification: FAILED (%d errors)\n", i8mm_8oc_errors);
+    }
+    
+    // Test I8MM Blocked-8 kernel
+    int8_t* weights_i8mm_b8 = malloc(N * K);
+    pack_weights_i8mm_blocked8(weights_i8mm_b8, weights, N, K);
+    
+    int32_t* out_i8mm_b8 = malloc(N * sizeof(int32_t));
+    memset(out_i8mm_b8, 0, N * sizeof(int32_t));
+    neon_i8mm_matvec_blocked8(out_i8mm_b8, act, weights_i8mm_b8, N, K);
+    
+    int i8mm_b8_errors = 0;
+    for (int i = 0; i < N; i++) {
+        if (out_i8mm_ref[i] != out_i8mm_b8[i]) {
+            i8mm_b8_errors++;
+            if (i8mm_b8_errors <= 5) {
+                printf("  I8MM B8 mismatch [%d]: ref=%d, i8mm=%d\n",
+                       i, out_i8mm_ref[i], out_i8mm_b8[i]);
+            }
+        }
+    }
+    if (i8mm_b8_errors == 0) {
+        printf("I8MM Blocked-8 verification: PASSED\n");
+    } else {
+        printf("I8MM Blocked-8 verification: FAILED (%d errors)\n", i8mm_b8_errors);
+    }
+    
+    // Benchmark I8MM 2OC
+    t0 = get_time_ns();
+    for (int i = 0; i < iters; i++) {
+        neon_i8mm_matvec_2oc(out_i8mm_2oc, act, weights_i8mm, N, K);
+    }
+    t1 = get_time_ns();
+    double i8mm_2oc_ns = (double)(t1 - t0) / iters;
+    double i8mm_2oc_gops = ops / i8mm_2oc_ns;
+    
+    // Benchmark I8MM 8OC
+    t0 = get_time_ns();
+    for (int i = 0; i < iters; i++) {
+        neon_i8mm_matvec_8oc(out_i8mm_8oc, act, weights_i8mm, N, K);
+    }
+    t1 = get_time_ns();
+    double i8mm_8oc_ns = (double)(t1 - t0) / iters;
+    double i8mm_8oc_gops = ops / i8mm_8oc_ns;
+    
+    // Benchmark I8MM Blocked-8
+    t0 = get_time_ns();
+    for (int i = 0; i < iters; i++) {
+        neon_i8mm_matvec_blocked8(out_i8mm_b8, act, weights_i8mm_b8, N, K);
+    }
+    t1 = get_time_ns();
+    double i8mm_b8_ns = (double)(t1 - t0) / iters;
+    double i8mm_b8_gops = ops / i8mm_b8_ns;
+    
+    // Test I8MM Blocked-16 kernel
+    int8_t* weights_i8mm_b16 = malloc(N * K);
+    pack_weights_i8mm_blocked16(weights_i8mm_b16, weights, N, K);
+    
+    int32_t* out_i8mm_b16 = malloc(N * sizeof(int32_t));
+    memset(out_i8mm_b16, 0, N * sizeof(int32_t));
+    neon_i8mm_matvec_blocked16(out_i8mm_b16, act, weights_i8mm_b16, N, K);
+    
+    int i8mm_b16_errors = 0;
+    for (int i = 0; i < N; i++) {
+        if (out_i8mm_ref[i] != out_i8mm_b16[i]) {
+            i8mm_b16_errors++;
+            if (i8mm_b16_errors <= 5) {
+                printf("  I8MM B16 mismatch [%d]: ref=%d, i8mm=%d\n",
+                       i, out_i8mm_ref[i], out_i8mm_b16[i]);
+            }
+        }
+    }
+    if (i8mm_b16_errors == 0) {
+        printf("I8MM Blocked-16 verification: PASSED\n");
+    } else {
+        printf("I8MM Blocked-16 verification: FAILED (%d errors)\n", i8mm_b16_errors);
+    }
+    
+    // Benchmark I8MM Blocked-16
+    t0 = get_time_ns();
+    for (int i = 0; i < iters; i++) {
+        neon_i8mm_matvec_blocked16(out_i8mm_b16, act, weights_i8mm_b16, N, K);
+    }
+    t1 = get_time_ns();
+    double i8mm_b16_ns = (double)(t1 - t0) / iters;
+    double i8mm_b16_gops = ops / i8mm_b16_ns;
+    
+    printf("  I8MM 2OC:    %.1f us (%.2f GOP/s)\n", i8mm_2oc_ns / 1000, i8mm_2oc_gops);
+    printf("  I8MM 8OC:    %.1f us (%.2f GOP/s)\n", i8mm_8oc_ns / 1000, i8mm_8oc_gops);
+    printf("  I8MM B8:     %.1f us (%.2f GOP/s)\n", i8mm_b8_ns / 1000, i8mm_b8_gops);
+    printf("  I8MM B16:    %.1f us (%.2f GOP/s)\n", i8mm_b16_ns / 1000, i8mm_b16_gops);
+    printf("  vs SDOT best: %.2fx\n", (best_sdot_gops > 0 ? (i8mm_b16_gops / best_sdot_gops) : 0));
+    
+    // Bandwidth for I8MM
+    double i8mm_bw_gbps = (bytes_per_iter / i8mm_b16_ns);
+    printf("  Bandwidth (I8MM): %.1f GB/s\n", i8mm_bw_gbps);
+    
+    // Update best if I8MM wins
+    if (i8mm_b16_gops > best_gops) best_gops = i8mm_b16_gops;
+    if (i8mm_b8_gops > best_gops) best_gops = i8mm_b8_gops;
+    if (i8mm_8oc_gops > best_gops) best_gops = i8mm_8oc_gops;
+    
+    free(weights_i8mm);
+    free(weights_i8mm_b8);
+    free(weights_i8mm_b16);
+    free(out_i8mm_ref);
+    free(out_i8mm_2oc);
+    free(out_i8mm_8oc);
+    free(out_i8mm_b8);
+    free(out_i8mm_b16);
 #endif
     
     // Estimate for 7B model

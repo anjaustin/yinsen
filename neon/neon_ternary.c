@@ -970,7 +970,6 @@ void neon_int8_matvec_blocked8_k64(
             
             #undef PROCESS_ROW_K64
         }
-        
         out[n + 0] = vaddvq_s32(acc0);
         out[n + 1] = vaddvq_s32(acc1);
         out[n + 2] = vaddvq_s32(acc2);
@@ -982,4 +981,460 @@ void neon_int8_matvec_blocked8_k64(
     }
 }
 #endif
+
+/* ========================================================================
+ * I8MM "MICRO-TENSOR ENGINE" KERNELS
+ * ========================================================================
+ *
+ * Uses SMMLA (Signed Matrix Multiply Accumulate) from ARMv8.6 I8MM extension.
+ * SMMLA computes a 2x2 matrix product in a single instruction:
+ *   C[2x2] += A[2x8] * B[8x2]
+ *
+ * This is 2x denser than SDOT (which does 1x4 dot product).
+ *
+ * Strategy: "Twin-Pipe" - process output channels in pairs.
+ *   - Duplicate activation vector to fill 2x8 matrix (fake batch=2)
+ *   - Interleave weight pairs into 8x2 matrix
+ *   - One SMMLA computes 2 output channels × 8 K-steps
+ *
+ * Target: 300-400 GOP/s
+ */
+
+#if defined(__ARM_FEATURE_MATMUL_INT8)
+
+/*
+ * pack_weights_i8mm_paired - Column-major layout for I8MM SMMLA
+ *
+ * SMMLA expects B matrix as 8×2 in COLUMN-MAJOR order:
+ *   Bytes 0-7  = Column 0 (8 elements for output channel N)
+ *   Bytes 8-15 = Column 1 (8 elements for output channel N+1)
+ *
+ * Input: weights[N, K] with values -1, 0, +1
+ * Output: packed[N/2, K/8, 16] - 8×2 tiles in column-major
+ *
+ * For each pair (n, n+1) and each 8-element K block:
+ *   [W[n,k+0..7], W[n+1,k+0..7]]
+ */
+void pack_weights_i8mm_paired(
+    int8_t* __restrict__ packed,
+    const int8_t* __restrict__ weights,
+    int N,  // Must be multiple of 2
+    int K   // Must be multiple of 8
+) {
+    const int K_blocks = K / 8;
+    
+    for (int n = 0; n < N; n += 2) {
+        for (int kb = 0; kb < K_blocks; kb++) {
+            int8_t* dst = packed + (n / 2) * K * 2 + kb * 16;
+            const int8_t* src0 = weights + n * K + kb * 8;
+            const int8_t* src1 = weights + (n + 1) * K + kb * 8;
+            
+            // Column 0: 8 weights for channel n
+            for (int i = 0; i < 8; i++) {
+                dst[i] = src0[i];
+            }
+            // Column 1: 8 weights for channel n+1
+            for (int i = 0; i < 8; i++) {
+                dst[8 + i] = src1[i];
+            }
+        }
+    }
+}
+
+/*
+ * neon_i8mm_matvec_2oc - Basic I8MM kernel (2 output channels per iteration)
+ *
+ * Uses vmmlaq_s32 (SMMLA) to compute 2 outputs × 8 K-steps per instruction.
+ *
+ * SMMLA semantics: C[2×2] += A[2×8] × B[8×2]
+ *   A layout: bytes 0-7 = row 0, bytes 8-15 = row 1 (row-major)
+ *   B layout: bytes 0-7 = col 0, bytes 8-15 = col 1 (column-major!)
+ *   C layout: [C00, C01, C10, C11]
+ *
+ * For batch=1 inference, we duplicate the activation vector to both rows.
+ * Result: C[0,0] and C[1,0] both contain dot(act, weights_col0) = channel n
+ *         C[0,1] and C[1,1] both contain dot(act, weights_col1) = channel n+1
+ */
+void neon_i8mm_matvec_2oc(
+    int32_t* __restrict__ out,
+    const int8_t* __restrict__ act,
+    const int8_t* __restrict__ wgt,  // Column-major tiles [N/2, K/8, 16]
+    int N,  // Output channels (must be multiple of 2)
+    int K   // Input channels (must be multiple of 16)
+) {
+    for (int n = 0; n < N; n += 2) {
+        // Accumulator: 2x2 matrix, we extract [0] and [1] for our 2 channels
+        int32x4_t acc = vdupq_n_s32(0);
+        
+        const int8_t* a_ptr = act;
+        const int8_t* w_ptr = wgt + (n / 2) * K * 2;  // Column-major tiles
+        
+        for (int k = 0; k < K; k += 16) {
+            // Load 16 activations
+            int8x16_t a_raw = vld1q_s8(a_ptr);
+            a_ptr += 16;
+            
+            // Duplicate to create 2x8 matrix (fake batch=2)
+            // For SMMLA: row 0 = A[0..7], row 1 = same A[0..7]
+            int8x16_t a_lo = vreinterpretq_s8_s64(
+                vdupq_laneq_s64(vreinterpretq_s64_s8(a_raw), 0));
+            int8x16_t a_hi = vreinterpretq_s8_s64(
+                vdupq_laneq_s64(vreinterpretq_s64_s8(a_raw), 1));
+            
+            // Load column-major weight tiles
+            // w_0: col0 = W[n, k:k+8], col1 = W[n+1, k:k+8]
+            // w_1: col0 = W[n, k+8:k+16], col1 = W[n+1, k+8:k+16]
+            int8x16_t w_0 = vld1q_s8(w_ptr);
+            int8x16_t w_1 = vld1q_s8(w_ptr + 16);
+            w_ptr += 32;
+            
+            // SMMLA: acc[2x2] += a[2x8] * w[8x2]
+            acc = vmmlaq_s32(acc, a_lo, w_0);
+            acc = vmmlaq_s32(acc, a_hi, w_1);
+        }
+        
+        // C[0] = dot(act, weights_n), C[1] = dot(act, weights_n+1)
+        out[n + 0] = vgetq_lane_s32(acc, 0);
+        out[n + 1] = vgetq_lane_s32(acc, 1);
+    }
+}
+
+/*
+ * neon_i8mm_matvec_8oc - I8MM kernel with 8 output channel blocking
+ *
+ * Process 4 pairs (8 channels) in parallel for latency hiding.
+ * Uses 4 accumulator registers for 4 SMMLA streams.
+ */
+void neon_i8mm_matvec_8oc(
+    int32_t* __restrict__ out,
+    const int8_t* __restrict__ act,
+    const int8_t* __restrict__ wgt,  // Column-major tiles [N/2, K/8, 16]
+    int N,  // Output channels (must be multiple of 8)
+    int K   // Input channels (must be multiple of 16)
+) {
+    for (int n = 0; n < N; n += 8) {
+        // 4 accumulators for 4 pairs (8 output channels)
+        int32x4_t acc0 = vdupq_n_s32(0);
+        int32x4_t acc1 = vdupq_n_s32(0);
+        int32x4_t acc2 = vdupq_n_s32(0);
+        int32x4_t acc3 = vdupq_n_s32(0);
+        
+        const int8_t* a_ptr = act;
+        // Weight pointers for 4 pairs (each pair processes 2 channels)
+        const int8_t* w0_ptr = wgt + ((n + 0) / 2) * K * 2;
+        const int8_t* w1_ptr = wgt + ((n + 2) / 2) * K * 2;
+        const int8_t* w2_ptr = wgt + ((n + 4) / 2) * K * 2;
+        const int8_t* w3_ptr = wgt + ((n + 6) / 2) * K * 2;
+        
+        for (int k = 0; k < K; k += 16) {
+            // Prefetch
+            if (k + 32 < K) {
+                __builtin_prefetch(a_ptr + 32, 0, 3);
+                __builtin_prefetch(w0_ptr + 64, 0, 3);
+                __builtin_prefetch(w2_ptr + 64, 0, 3);
+            }
+            
+            // Load and duplicate activations
+            int8x16_t a_raw = vld1q_s8(a_ptr);
+            a_ptr += 16;
+            
+            int8x16_t a_lo = vreinterpretq_s8_s64(
+                vdupq_laneq_s64(vreinterpretq_s64_s8(a_raw), 0));
+            int8x16_t a_hi = vreinterpretq_s8_s64(
+                vdupq_laneq_s64(vreinterpretq_s64_s8(a_raw), 1));
+            
+            // Process pair 0 (channels n, n+1)
+            {
+                int8x16_t w0 = vld1q_s8(w0_ptr);
+                int8x16_t w1 = vld1q_s8(w0_ptr + 16);
+                w0_ptr += 32;
+                acc0 = vmmlaq_s32(acc0, a_lo, w0);
+                acc0 = vmmlaq_s32(acc0, a_hi, w1);
+            }
+            
+            // Process pair 1 (channels n+2, n+3)
+            {
+                int8x16_t w0 = vld1q_s8(w1_ptr);
+                int8x16_t w1 = vld1q_s8(w1_ptr + 16);
+                w1_ptr += 32;
+                acc1 = vmmlaq_s32(acc1, a_lo, w0);
+                acc1 = vmmlaq_s32(acc1, a_hi, w1);
+            }
+            
+            // Process pair 2 (channels n+4, n+5)
+            {
+                int8x16_t w0 = vld1q_s8(w2_ptr);
+                int8x16_t w1 = vld1q_s8(w2_ptr + 16);
+                w2_ptr += 32;
+                acc2 = vmmlaq_s32(acc2, a_lo, w0);
+                acc2 = vmmlaq_s32(acc2, a_hi, w1);
+            }
+            
+            // Process pair 3 (channels n+6, n+7)
+            {
+                int8x16_t w0 = vld1q_s8(w3_ptr);
+                int8x16_t w1 = vld1q_s8(w3_ptr + 16);
+                w3_ptr += 32;
+                acc3 = vmmlaq_s32(acc3, a_lo, w0);
+                acc3 = vmmlaq_s32(acc3, a_hi, w1);
+            }
+        }
+        
+        // Extract results
+        out[n + 0] = vgetq_lane_s32(acc0, 0);
+        out[n + 1] = vgetq_lane_s32(acc0, 1);
+        out[n + 2] = vgetq_lane_s32(acc1, 0);
+        out[n + 3] = vgetq_lane_s32(acc1, 1);
+        out[n + 4] = vgetq_lane_s32(acc2, 0);
+        out[n + 5] = vgetq_lane_s32(acc2, 1);
+        out[n + 6] = vgetq_lane_s32(acc3, 0);
+        out[n + 7] = vgetq_lane_s32(acc3, 1);
+    }
+}
+
+/*
+ * pack_weights_i8mm_blocked8 - Blocked I8MM layout for cache efficiency
+ *
+ * Combines column-major tiles with 8-channel blocking.
+ * For each N-block (8 channels = 4 pairs) and K-block (16 elements = 2 SMMLA ops):
+ *   Pack 4 pairs × 2 tiles = 8 tiles = 128 bytes
+ *
+ * Block layout: [pair0_tile0, pair0_tile1, pair1_tile0, pair1_tile1, ...]
+ * Each tile is 16 bytes (col0: 8 bytes, col1: 8 bytes)
+ */
+void pack_weights_i8mm_blocked8(
+    int8_t* __restrict__ packed,
+    const int8_t* __restrict__ weights,
+    int N,  // Must be multiple of 8
+    int K   // Must be multiple of 16
+) {
+    const int K_blocks = K / 16;  // 16 K-steps per block (2 SMMLA ops)
+    const int N_blocks = N / 8;
+    // Block: 4 pairs × 2 tiles × 16 bytes = 128 bytes
+    const int block_stride = 4 * 2 * 16;
+    
+    for (int nb = 0; nb < N_blocks; nb++) {
+        for (int kb = 0; kb < K_blocks; kb++) {
+            int8_t* dst = packed + (nb * K_blocks + kb) * block_stride;
+            
+            // Pack 4 pairs (8 channels)
+            for (int pair = 0; pair < 4; pair++) {
+                int n0 = nb * 8 + pair * 2;
+                int n1 = n0 + 1;
+                int k_start = kb * 16;
+                
+                // Tile 0: K[0..7] for this pair
+                for (int i = 0; i < 8; i++) {
+                    dst[pair * 32 + i] = weights[n0 * K + k_start + i];
+                    dst[pair * 32 + 8 + i] = weights[n1 * K + k_start + i];
+                }
+                // Tile 1: K[8..15] for this pair
+                for (int i = 0; i < 8; i++) {
+                    dst[pair * 32 + 16 + i] = weights[n0 * K + k_start + 8 + i];
+                    dst[pair * 32 + 24 + i] = weights[n1 * K + k_start + 8 + i];
+                }
+            }
+        }
+    }
+}
+
+/*
+ * neon_i8mm_matvec_blocked8 - Cache-optimized I8MM kernel
+ *
+ * Uses blocked weight layout for sequential memory access.
+ * All 4 pairs (8 channels) read from same 128-byte block.
+ */
+void neon_i8mm_matvec_blocked8(
+    int32_t* __restrict__ out,
+    const int8_t* __restrict__ act,
+    const int8_t* __restrict__ wgt,  // Blocked-8 I8MM format
+    int N,  // Output channels (must be multiple of 8)
+    int K   // Input channels (must be multiple of 16)
+) {
+    const int K_blocks = K / 16;
+    const int block_stride = 4 * 2 * 16;  // 128 bytes per block
+    
+    for (int n = 0; n < N; n += 8) {
+        int nb = n / 8;
+        
+        int32x4_t acc0 = vdupq_n_s32(0);
+        int32x4_t acc1 = vdupq_n_s32(0);
+        int32x4_t acc2 = vdupq_n_s32(0);
+        int32x4_t acc3 = vdupq_n_s32(0);
+        
+        const int8_t* a_ptr = act;
+        const int8_t* w_base = wgt + nb * K_blocks * block_stride;
+        
+        for (int kb = 0; kb < K_blocks; kb++) {
+            // Prefetch
+            if (kb + 2 < K_blocks) {
+                __builtin_prefetch(a_ptr + 32, 0, 3);
+                __builtin_prefetch(w_base + (kb + 2) * block_stride, 0, 3);
+            }
+            
+            // Load 16 activations
+            int8x16_t a_raw = vld1q_s8(a_ptr);
+            a_ptr += 16;
+            
+            int8x16_t a_lo = vreinterpretq_s8_s64(
+                vdupq_laneq_s64(vreinterpretq_s64_s8(a_raw), 0));
+            int8x16_t a_hi = vreinterpretq_s8_s64(
+                vdupq_laneq_s64(vreinterpretq_s64_s8(a_raw), 1));
+            
+            const int8_t* w_block = w_base + kb * block_stride;
+            
+            // Each pair: 32 bytes = 2 tiles (tile0 for K[0..7], tile1 for K[8..15])
+            #define PROCESS_PAIR(ACC, PAIR) { \
+                int8x16_t w0 = vld1q_s8(w_block + PAIR * 32); \
+                int8x16_t w1 = vld1q_s8(w_block + PAIR * 32 + 16); \
+                ACC = vmmlaq_s32(ACC, a_lo, w0); \
+                ACC = vmmlaq_s32(ACC, a_hi, w1); \
+            }
+            
+            PROCESS_PAIR(acc0, 0);
+            PROCESS_PAIR(acc1, 1);
+            PROCESS_PAIR(acc2, 2);
+            PROCESS_PAIR(acc3, 3);
+            
+            #undef PROCESS_PAIR
+        }
+        
+        out[n + 0] = vgetq_lane_s32(acc0, 0);
+        out[n + 1] = vgetq_lane_s32(acc0, 1);
+        out[n + 2] = vgetq_lane_s32(acc1, 0);
+        out[n + 3] = vgetq_lane_s32(acc1, 1);
+        out[n + 4] = vgetq_lane_s32(acc2, 0);
+        out[n + 5] = vgetq_lane_s32(acc2, 1);
+        out[n + 6] = vgetq_lane_s32(acc3, 0);
+        out[n + 7] = vgetq_lane_s32(acc3, 1);
+    }
+}
+
+/*
+ * pack_weights_i8mm_blocked16 - Blocked I8MM layout for 16 output channels
+ *
+ * 8 pairs × 16 K-steps = 256 bytes per block
+ */
+void pack_weights_i8mm_blocked16(
+    int8_t* __restrict__ packed,
+    const int8_t* __restrict__ weights,
+    int N,  // Must be multiple of 16
+    int K   // Must be multiple of 16
+) {
+    const int K_blocks = K / 16;
+    const int N_blocks = N / 16;
+    const int block_stride = 8 * 2 * 16;  // 256 bytes per block
+    
+    for (int nb = 0; nb < N_blocks; nb++) {
+        for (int kb = 0; kb < K_blocks; kb++) {
+            int8_t* dst = packed + (nb * K_blocks + kb) * block_stride;
+            
+            for (int pair = 0; pair < 8; pair++) {
+                int n0 = nb * 16 + pair * 2;
+                int n1 = n0 + 1;
+                int k_start = kb * 16;
+                
+                // Tile 0: K[0..7]
+                for (int i = 0; i < 8; i++) {
+                    dst[pair * 32 + i] = weights[n0 * K + k_start + i];
+                    dst[pair * 32 + 8 + i] = weights[n1 * K + k_start + i];
+                }
+                // Tile 1: K[8..15]
+                for (int i = 0; i < 8; i++) {
+                    dst[pair * 32 + 16 + i] = weights[n0 * K + k_start + 8 + i];
+                    dst[pair * 32 + 24 + i] = weights[n1 * K + k_start + 8 + i];
+                }
+            }
+        }
+    }
+}
+
+/*
+ * neon_i8mm_matvec_blocked16 - 16 output channel I8MM kernel
+ *
+ * Process 8 pairs (16 channels) per N-iteration for maximum parallelism.
+ */
+void neon_i8mm_matvec_blocked16(
+    int32_t* __restrict__ out,
+    const int8_t* __restrict__ act,
+    const int8_t* __restrict__ wgt,
+    int N,  // Must be multiple of 16
+    int K   // Must be multiple of 16
+) {
+    const int K_blocks = K / 16;
+    const int block_stride = 8 * 2 * 16;  // 256 bytes
+    
+    for (int n = 0; n < N; n += 16) {
+        int nb = n / 16;
+        
+        // 8 accumulators for 8 pairs
+        int32x4_t acc0 = vdupq_n_s32(0);
+        int32x4_t acc1 = vdupq_n_s32(0);
+        int32x4_t acc2 = vdupq_n_s32(0);
+        int32x4_t acc3 = vdupq_n_s32(0);
+        int32x4_t acc4 = vdupq_n_s32(0);
+        int32x4_t acc5 = vdupq_n_s32(0);
+        int32x4_t acc6 = vdupq_n_s32(0);
+        int32x4_t acc7 = vdupq_n_s32(0);
+        
+        const int8_t* a_ptr = act;
+        const int8_t* w_base = wgt + nb * K_blocks * block_stride;
+        
+        for (int kb = 0; kb < K_blocks; kb++) {
+            if (kb + 2 < K_blocks) {
+                __builtin_prefetch(a_ptr + 32, 0, 3);
+                __builtin_prefetch(w_base + (kb + 2) * block_stride, 0, 3);
+                __builtin_prefetch(w_base + (kb + 2) * block_stride + 128, 0, 3);
+            }
+            
+            int8x16_t a_raw = vld1q_s8(a_ptr);
+            a_ptr += 16;
+            
+            int8x16_t a_lo = vreinterpretq_s8_s64(
+                vdupq_laneq_s64(vreinterpretq_s64_s8(a_raw), 0));
+            int8x16_t a_hi = vreinterpretq_s8_s64(
+                vdupq_laneq_s64(vreinterpretq_s64_s8(a_raw), 1));
+            
+            const int8_t* w_block = w_base + kb * block_stride;
+            
+            #define PROCESS_PAIR16(ACC, PAIR) { \
+                int8x16_t w0 = vld1q_s8(w_block + PAIR * 32); \
+                int8x16_t w1 = vld1q_s8(w_block + PAIR * 32 + 16); \
+                ACC = vmmlaq_s32(ACC, a_lo, w0); \
+                ACC = vmmlaq_s32(ACC, a_hi, w1); \
+            }
+            
+            PROCESS_PAIR16(acc0, 0);
+            PROCESS_PAIR16(acc1, 1);
+            PROCESS_PAIR16(acc2, 2);
+            PROCESS_PAIR16(acc3, 3);
+            PROCESS_PAIR16(acc4, 4);
+            PROCESS_PAIR16(acc5, 5);
+            PROCESS_PAIR16(acc6, 6);
+            PROCESS_PAIR16(acc7, 7);
+            
+            #undef PROCESS_PAIR16
+        }
+        
+        out[n + 0] = vgetq_lane_s32(acc0, 0);
+        out[n + 1] = vgetq_lane_s32(acc0, 1);
+        out[n + 2] = vgetq_lane_s32(acc1, 0);
+        out[n + 3] = vgetq_lane_s32(acc1, 1);
+        out[n + 4] = vgetq_lane_s32(acc2, 0);
+        out[n + 5] = vgetq_lane_s32(acc2, 1);
+        out[n + 6] = vgetq_lane_s32(acc3, 0);
+        out[n + 7] = vgetq_lane_s32(acc3, 1);
+        out[n + 8] = vgetq_lane_s32(acc4, 0);
+        out[n + 9] = vgetq_lane_s32(acc4, 1);
+        out[n + 10] = vgetq_lane_s32(acc5, 0);
+        out[n + 11] = vgetq_lane_s32(acc5, 1);
+        out[n + 12] = vgetq_lane_s32(acc6, 0);
+        out[n + 13] = vgetq_lane_s32(acc6, 1);
+        out[n + 14] = vgetq_lane_s32(acc7, 0);
+        out[n + 15] = vgetq_lane_s32(acc7, 1);
+    }
+}
+
+#endif  // __ARM_FEATURE_MATMUL_INT8
+
 
