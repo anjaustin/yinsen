@@ -212,7 +212,9 @@ extern float sme_dot16_asm(const float* activations, uint32_t weights);
 extern void sme_dot16_batch_asm(float* results, const float* activations,
                                  const uint32_t* weights, uint32_t count);
 extern void sme_matvec_16x16_asm(float* output, const uint32_t* weights,
-                                  const float* input);
+                                   const float* input);
+extern void sme_matvec_32x32_asm(float* output, const uint32_t* weights,
+                                   const float* input);
 
 #if 0 /* Intrinsics version - kept for reference */
 #if defined(__ARM_FEATURE_SME) && __ARM_FEATURE_SME
@@ -256,10 +258,15 @@ void sme_matvec(float* output, const uint32_t* weights, const float* input,
                 size_t M, size_t K) {
     memset(output, 0, M * sizeof(float));
     
-    if (sme_runtime_available() && M == 16 && K == 16) {
-        // Use optimized 16x16 ASM kernel
-        sme_matvec_16x16_asm(output, weights, input);
-        return;
+    if (sme_runtime_available()) {
+        if (M == 16 && K == 16) {
+            sme_matvec_16x16_asm(output, weights, input);
+            return;
+        }
+        if (M == 32 && K == 32) {
+            sme_matvec_32x32_asm(output, weights, input);
+            return;
+        }
     }
     
     // Fall back to reference for other sizes

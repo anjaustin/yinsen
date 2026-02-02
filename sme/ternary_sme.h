@@ -80,6 +80,7 @@ float sme_dot16(const float* activations, uint32_t weights);
  *
  * Note: This function internally handles non-aligned dimensions by padding.
  *       For best performance, use dimensions that are multiples of 16.
+ *       Optimized ASM kernels exist for 16x16 and 32x32 (dispatched automatically).
  */
 void sme_matvec(float* output, const uint32_t* weights, const float* input, 
                 size_t M, size_t K);

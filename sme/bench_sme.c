@@ -143,6 +143,51 @@ static void bench_matvec_16x16(void) {
     printf("\n");
 }
 
+static void bench_matvec_32x32(void) {
+    printf("Benchmark: matvec 32x32\n");
+
+    const int WARMUP = 1000;
+    const int ITERS = 100000;
+
+    uint32_t rng = 0xFACEFEED;
+
+    /* Generate test data */
+    float input[32];
+    for (int i = 0; i < 32; i++) {
+        input[i] = random_float(&rng);
+    }
+
+    uint32_t weights[64];  /* 4 tiles of 16 */
+    for (int i = 0; i < 64; i++) {
+        weights[i] = random_weights(&rng);
+    }
+
+    float output[32];
+
+    /* Warmup */
+    for (int i = 0; i < WARMUP; i++) {
+        sme_matvec(output, weights, input, 32, 32);
+    }
+
+    /* Timed run */
+    double start = get_time_ns();
+    for (int i = 0; i < ITERS; i++) {
+        sme_matvec(output, weights, input, 32, 32);
+    }
+    double end = get_time_ns();
+
+    double elapsed_s = (end - start) / 1e9;
+    double ops_per_call = 32 * 32;  /* 1024 ternary multiply-adds */
+    double total_ops = (double)ITERS * ops_per_call;
+    double gops = total_ops / elapsed_s / 1e9;
+
+    printf("  Iterations:  %d\n", ITERS);
+    printf("  Time:        %.3f ms\n", (end - start) / 1e6);
+    printf("  Throughput:  %.2f Gop/s\n", gops);
+    printf("  Per call:    %.1f ns\n", (end - start) / ITERS);
+    printf("\n");
+}
+
 static void bench_matvec_large(size_t M, size_t K) {
     printf("Benchmark: matvec %zux%zu\n", M, K);
     
@@ -321,6 +366,7 @@ int main(int argc, char** argv) {
     printf("-----------------------------------------------------------------\n");
     bench_dot16();
     bench_matvec_16x16();
+    bench_matvec_32x32();
     
     printf("-----------------------------------------------------------------\n");
     printf("Matrix-vector (typical layer sizes):\n");

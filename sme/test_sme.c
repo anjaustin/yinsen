@@ -257,6 +257,156 @@ static void test_matvec_16x16_all_ones(void) {
 }
 
 /* ============================================================================
+ * 32x32 Matrix-Vector Tests
+ * ============================================================================ */
+
+static void test_matvec_32x32_identity(void) {
+    TEST("matvec: 32x32 identity-like");
+
+    /* 4 tiles: T00, T01, T10, T11 — each 16 uint32_t */
+    uint32_t weights[64];
+    memset(weights, 0, sizeof(weights));
+
+    /* T00: rows 0-15, cols 0-15 — diagonal +1 */
+    for (int i = 0; i < 16; i++) {
+        weights[i] = 0x1 << (i * 2);
+    }
+    /* T01: rows 0-15, cols 16-31 — all zero (already zeroed) */
+    /* T10: rows 16-31, cols 0-15 — all zero (already zeroed) */
+    /* T11: rows 16-31, cols 16-31 — diagonal +1 */
+    for (int i = 0; i < 16; i++) {
+        weights[48 + i] = 0x1 << (i * 2);
+    }
+
+    float input[32];
+    for (int i = 0; i < 32; i++) input[i] = (float)(i + 1);
+    float output[32];
+
+    sme_matvec(output, weights, input, 32, 32);
+
+    for (int i = 0; i < 32; i++) {
+        ASSERT_FLOAT_EQ(output[i], input[i], "identity output[%d]", i);
+    }
+    PASS();
+}
+
+static void test_matvec_32x32_all_ones(void) {
+    TEST("matvec: 32x32 all +1 weights");
+
+    uint32_t weights[64];
+    for (int i = 0; i < 64; i++) {
+        weights[i] = 0x55555555;  /* All +1 */
+    }
+
+    float input[32];
+    for (int i = 0; i < 32; i++) input[i] = 1.0f;
+    float output[32];
+
+    sme_matvec(output, weights, input, 32, 32);
+
+    /* Each output should be sum of all 32 inputs = 32 */
+    for (int i = 0; i < 32; i++) {
+        ASSERT_FLOAT_EQ(output[i], 32.0f, "all-ones output[%d]", i);
+    }
+    PASS();
+}
+
+static void test_matvec_32x32_block_diagonal(void) {
+    TEST("matvec: 32x32 block diagonal (+1 top, -1 bottom)");
+
+    uint32_t weights[64];
+    memset(weights, 0, sizeof(weights));
+
+    /* T00: all +1 (rows 0-15 sum cols 0-15) */
+    for (int i = 0; i < 16; i++) weights[i] = 0x55555555;
+    /* T01: all zero */
+    /* T10: all zero */
+    /* T11: all -1 (rows 16-31 negate-sum cols 16-31) */
+    for (int i = 0; i < 16; i++) weights[48 + i] = 0xAAAAAAAA;
+
+    float input[32];
+    for (int i = 0; i < 32; i++) input[i] = 1.0f;
+    float output[32];
+
+    sme_matvec(output, weights, input, 32, 32);
+
+    /* Rows 0-15: sum of input[0:15] = 16 */
+    for (int i = 0; i < 16; i++) {
+        ASSERT_FLOAT_EQ(output[i], 16.0f, "block diag output[%d]", i);
+    }
+    /* Rows 16-31: -sum of input[16:31] = -16 */
+    for (int i = 16; i < 32; i++) {
+        ASSERT_FLOAT_EQ(output[i], -16.0f, "block diag output[%d]", i);
+    }
+    PASS();
+}
+
+static void test_sme_matches_ref_matvec_32x32(void) {
+    TEST("SME matvec 32x32 matches reference");
+
+    if (!sme_available()) {
+        printf("SKIP (no SME)\n");
+        tests_passed++;
+        return;
+    }
+
+    uint32_t rng = 0xFEEDFACE;
+
+    uint32_t weights[64];
+    for (int i = 0; i < 64; i++) {
+        weights[i] = random_weights(&rng);
+    }
+
+    float input[32];
+    for (int i = 0; i < 32; i++) {
+        input[i] = random_float(&rng);
+    }
+
+    float output_ref[32], output_sme[32];
+    memset(output_ref, 0, sizeof(output_ref));
+
+    sme_matvec_ref(output_ref, weights, input, 32, 32);
+    sme_matvec(output_sme, weights, input, 32, 32);
+
+    for (int i = 0; i < 32; i++) {
+        ASSERT_FLOAT_EQ(output_sme[i], output_ref[i], "32x32 output[%d]", i);
+    }
+    PASS();
+}
+
+static void test_random_matvec_32x32(void) {
+    TEST("random matvec 32x32: 10K samples");
+
+    uint32_t rng = 0xDEADC0DE;
+
+    for (int sample = 0; sample < 10000; sample++) {
+        float input[32];
+        for (int i = 0; i < 32; i++) {
+            input[i] = random_float(&rng);
+        }
+
+        uint32_t weights[64];
+        for (int i = 0; i < 64; i++) {
+            weights[i] = random_weights(&rng);
+        }
+
+        float output_ref[32], output_sme[32];
+        memset(output_ref, 0, sizeof(output_ref));
+        sme_matvec_ref(output_ref, weights, input, 32, 32);
+        sme_matvec(output_sme, weights, input, 32, 32);
+
+        for (int i = 0; i < 32; i++) {
+            if (fabsf(output_ref[i] - output_sme[i]) >= EPSILON) {
+                FAIL("sample %d, output[%d]: ref=%f, sme=%f",
+                     sample, i, output_ref[i], output_sme[i]);
+                return;
+            }
+        }
+    }
+    PASS();
+}
+
+/* ============================================================================
  * SME vs Reference Tests
  * ============================================================================ */
 
@@ -464,6 +614,14 @@ int main(int argc, char** argv) {
     test_matvec_16x16_all_ones();
     printf("\n");
     
+    printf("32x32 matrix-vector tests:\n");
+    test_matvec_32x32_identity();
+    test_matvec_32x32_all_ones();
+    test_matvec_32x32_block_diagonal();
+    test_sme_matches_ref_matvec_32x32();
+    test_random_matvec_32x32();
+    printf("\n");
+
     printf("SME vs reference tests:\n");
     test_sme_matches_ref_dot16();
     test_sme_matches_ref_matvec();
