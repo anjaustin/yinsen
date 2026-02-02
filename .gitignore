@@ -5,6 +5,29 @@ build/
 *.so
 *.dylib
 
+# Compiled binaries (Mach-O executables)
+# These are rebuilt from source with cc -O2
+examples/iss_telemetry
+examples/keystroke_biometric
+examples/seismic_detector
+experiments/iss_probes/iss_probe1
+experiments/iss_probes/iss_probe2
+experiments/iss_probes/iss_probe3
+experiments/ternary_quantization/quant_probe1
+experiments/ternary_quantization/quant_probe2_fpu
+test/test_chips
+neon/test_neon
+
+# Logs, data, archives
+*.log
+*.csv
+*.tar.gz
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+
 # Editor
 .vscode/
 .idea/
