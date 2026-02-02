@@ -2,11 +2,14 @@
  * YINSEN EntroMorph Tests
  *
  * Tests for the evolutionary engine:
- * 1. Component tests (RNG, genesis, mutation)
- * 2. Convergence tests (can it learn XOR?)
+ * 1. Component tests (RNG, genesis, mutation) -- these PASS and are valid
+ * 2. Convergence tests (can it learn XOR?) -- these PASS but are MISLEADING
  *
- * This is the critical test: if evolution can't learn XOR,
- * the entire system is invalid.
+ * FALSIFICATION NOTE (2026-01-26):
+ * Evolution was falsified. 100/100 runs "converge" but 0/100 have >10%
+ * confidence margin. Solutions predict ~0.5 for all inputs (random chance).
+ * The component functions work correctly; the evolution process does not
+ * produce learned solutions. See docs/FALSIFICATION_ENTROMORPH.md.
  */
 
 #include "../include/entromorph.h"

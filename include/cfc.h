@@ -63,7 +63,7 @@ typedef struct {
 typedef struct {
     int hidden_dim;
     int output_dim;
-    const float* W_out;     /* [hidden_dim, output_dim] */
+    const float* W_out;     /* [output_dim, hidden_dim] -- gemm(h[1,hid], W_out[out,hid]^T) */
     const float* b_out;     /* [output_dim] */
 } CfCOutputParams;
 
@@ -71,6 +71,15 @@ typedef struct {
  * CfC CELL - Single step
  * ============================================================================ */
 
+/*
+ * Stack usage: (input_dim + 6 * hidden_dim) * sizeof(float) bytes.
+ *   hidden_dim=256:  ~6.5 KB
+ *   hidden_dim=1024: ~25 KB
+ *   hidden_dim=4096: ~96 KB
+ *
+ * Callers on stack-constrained platforms (embedded, threads with small
+ * stacks) must ensure sufficient stack space.
+ */
 static inline void yinsen_cfc_cell(
     const float* x,
     const float* h_prev,
@@ -107,15 +116,31 @@ static inline void yinsen_cfc_cell(
         candidate[i] = yinsen_tanh(cand_pre[i]);
     }
 
-    /* Step 4: Decay = exp(-dt / tau) */
+    /* Step 4: Decay = exp(-dt / tau)
+     * Initialize to NAN so invalid tau propagates cleanly through Step 5
+     * rather than reading uninitialized memory (undefined behavior). */
     float decay[hid_dim];
+    for (int i = 0; i < hid_dim; i++) decay[i] = NAN;
     if (params->tau_shared) {
+        /* Validate tau > 0 - required for continuous-time behavior */
+        if (params->tau[0] <= 0.0f) {
+            /* Invalid tau - return NaN to signal error */
+            for (int i = 0; i < hid_dim; i++) {
+                h_new[i] = NAN;
+            }
+            return;
+        }
         float decay_scalar = expf(-dt / params->tau[0]);
         for (int i = 0; i < hid_dim; i++) {
             decay[i] = decay_scalar;
         }
     } else {
         for (int i = 0; i < hid_dim; i++) {
+            /* Validate tau > 0 - required for continuous-time behavior */
+            if (params->tau[i] <= 0.0f) {
+                h_new[i] = NAN;
+                continue;
+            }
             decay[i] = expf(-dt / params->tau[i]);
         }
     }

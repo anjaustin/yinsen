@@ -4,11 +4,11 @@
  * Proven-correct ternary compute kernels for Apple Silicon.
  * Matches include/ternary.h semantics exactly.
  *
- * Encoding (2 bits per trit):
+ * Canonical encoding (2 bits per trit) - matches all backends:
  *   00 = 0  (zero - skip)
  *   01 = +1 (add)
- *   11 = -1 (subtract)
- *   10 = reserved (treated as 0)
+ *   10 = -1 (subtract)
+ *   11 = reserved (treated as 0)
  *
  * Verification: All kernels proven via exhaustive testing.
  * See metal/test/ for verification harness.
@@ -19,31 +19,22 @@ using namespace metal;
 
 // =============================================================================
 // TRIT OPERATIONS
+// Guarded to allow concatenation with other .metal files.
 // =============================================================================
 
-// Extract trit sign from 2-bit encoding
+#ifndef YINSEN_TRIT_PRIMITIVES
+#define YINSEN_TRIT_PRIMITIVES
+
+// Extract trit sign from 2-bit canonical encoding
 // Returns: +1, -1, or 0
+//
+// Canonical encoding:
+//   00 (0) -> 0
+//   01 (1) -> +1
+//   10 (2) -> -1
+//   11 (3) -> 0 (reserved)
 inline int trit_sign(uint8_t encoding) {
-    // encoding & 1 = 1 if positive or negative
-    // encoding >> 1 = 1 if negative
-    // sign = (encoding & 1) - ((encoding >> 1) & 1)
-    //   00 -> 0 - 0 = 0
-    //   01 -> 1 - 0 = +1
-    //   11 -> 1 - 1 = 0... wait, that's wrong
-    
-    // Correct logic:
-    //   00 (0) -> 0
-    //   01 (1) -> +1
-    //   11 (3) -> -1
-    //   10 (2) -> 0 (reserved)
-    
-    int lsb = encoding & 1;        // 1 if 01 or 11
-    int msb = (encoding >> 1) & 1; // 1 if 10 or 11
-    
-    // If LSB=1 and MSB=0: +1
-    // If LSB=1 and MSB=1: -1
-    // Otherwise: 0
-    return lsb * (1 - 2 * msb);
+    return int(encoding == 1) - int(encoding == 2);
 }
 
 // Extract trit at position (0-3) from packed byte
@@ -81,6 +72,8 @@ inline float ternary_dot4(uint8_t packed, float4 x) {
     
     return sum;
 }
+
+#endif // YINSEN_TRIT_PRIMITIVES
 
 // Branchless version using FMA
 inline float ternary_dot4_branchless(uint8_t packed, float4 x) {
@@ -194,11 +187,11 @@ kernel void verify_dot4_exhaustive(
     int t2 = ((config_idx / 9) % 3) - 1;
     int t3 = ((config_idx / 27) % 3) - 1;
     
-    // Encode to packed byte using Yinsen encoding
+    // Encode to packed byte using canonical encoding
     auto encode_trit = [](int val) -> uint8_t {
-        if (val > 0) return 0x1;  // 01
-        if (val < 0) return 0x3;  // 11
-        return 0x0;               // 00
+        if (val > 0) return 0x1;  // 01 = +1
+        if (val < 0) return 0x2;  // 10 = -1
+        return 0x0;               // 00 = 0
     };
     
     uint8_t packed = (encode_trit(t0) << 0) |
@@ -238,9 +231,9 @@ kernel void verify_matvec4x4_batch(
             remaining /= 3;
             
             uint8_t encoded;
-            if (trit_val > 0) encoded = 0x1;
-            else if (trit_val < 0) encoded = 0x3;
-            else encoded = 0x0;
+            if (trit_val > 0) encoded = 0x1;       // 01 = +1
+            else if (trit_val < 0) encoded = 0x2;  // 10 = -1
+            else encoded = 0x0;                     // 00 = 0
             
             byte_val |= (encoded << (trit_idx * 2));
         }

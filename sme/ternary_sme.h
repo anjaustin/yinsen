@@ -9,7 +9,7 @@
  * FMOPA operations: +1 triggers positive accumulation, -1 triggers
  * negative accumulation (via negated activations), 0 is skipped.
  *
- * Weight encoding (same as Metal):
+ * Weight encoding (canonical - see include/trit_encoding.h):
  *   0b00 = 0  (zero)
  *   0b01 = +1 (positive)
  *   0b10 = -1 (negative)

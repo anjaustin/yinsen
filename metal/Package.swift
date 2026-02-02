@@ -30,9 +30,10 @@ let package = Package(
             path: "Sources",
             resources: [
                 .copy("../kernels/ternary_core.metal"),
+                .copy("../kernels/ternary_8x8.metal"),
+                .copy("../kernels/ternary_matvec_tiled.metal"),
                 .copy("../kernels/activations.metal"),
-                .copy("../kernels/layernorm.metal"),
-                .copy("../kernels/ternary_8x8.metal")
+                .copy("../kernels/layernorm.metal")
             ]
         )
     ]

@@ -217,6 +217,120 @@ void test_cfc_ternary_memory(void) {
 }
 
 /* ============================================================================
+ * PER-ELEMENT TAU TESTS (verifies the decay[] initialization fix)
+ * ============================================================================ */
+
+void test_cfc_ternary_tau_per_element_valid(void) {
+    printf("\n=== CfC Ternary Per-Element Tau (all valid) ===\n");
+
+    init_test_weights();
+
+    /* Per-element tau, all valid */
+    float tau_per[TEST_HIDDEN_DIM] = {1.0f, 0.5f, 2.0f, 1.5f};
+
+    CfCTernaryParams params = {
+        .input_dim = TEST_INPUT_DIM,
+        .hidden_dim = TEST_HIDDEN_DIM,
+        .W_gate = test_W_gate,
+        .b_gate = test_b_gate,
+        .W_cand = test_W_cand,
+        .b_cand = test_b_cand,
+        .tau = tau_per,
+        .tau_shared = 0,
+    };
+
+    float x[TEST_INPUT_DIM] = {0.5f, -0.3f};
+    float h_prev[TEST_HIDDEN_DIM] = {0.1f, 0.2f, 0.0f, 0.0f};
+    float h_new[TEST_HIDDEN_DIM];
+
+    yinsen_cfc_ternary_cell(x, h_prev, 0.1f, &params, h_new);
+
+    int all_finite = 1;
+    for (int i = 0; i < TEST_HIDDEN_DIM; i++) {
+        if (isnan(h_new[i]) || isinf(h_new[i])) all_finite = 0;
+    }
+    TEST(all_finite, "Per-element tau (all valid) produces finite output");
+
+    /* Determinism check */
+    float h_new2[TEST_HIDDEN_DIM];
+    yinsen_cfc_ternary_cell(x, h_prev, 0.1f, &params, h_new2);
+    int match = 1;
+    for (int i = 0; i < TEST_HIDDEN_DIM; i++) {
+        if (h_new[i] != h_new2[i]) match = 0;
+    }
+    TEST(match, "Per-element tau is deterministic");
+}
+
+void test_cfc_ternary_tau_per_element_some_invalid(void) {
+    printf("\n=== CfC Ternary Per-Element Tau (some invalid) ===\n");
+
+    init_test_weights();
+
+    /* tau[1] and tau[3] are invalid (<= 0) */
+    float tau_per[TEST_HIDDEN_DIM] = {1.0f, 0.0f, 2.0f, -1.0f};
+
+    CfCTernaryParams params = {
+        .input_dim = TEST_INPUT_DIM,
+        .hidden_dim = TEST_HIDDEN_DIM,
+        .W_gate = test_W_gate,
+        .b_gate = test_b_gate,
+        .W_cand = test_W_cand,
+        .b_cand = test_b_cand,
+        .tau = tau_per,
+        .tau_shared = 0,
+    };
+
+    float x[TEST_INPUT_DIM] = {0.5f, -0.3f};
+    float h_prev[TEST_HIDDEN_DIM] = {0.1f, 0.2f, 0.3f, 0.4f};
+    float h_new[TEST_HIDDEN_DIM];
+
+    yinsen_cfc_ternary_cell(x, h_prev, 0.1f, &params, h_new);
+
+    /* Valid tau indices should produce finite results */
+    TEST(!isnan(h_new[0]) && !isinf(h_new[0]),
+         "tau[0]=1.0 (valid) -> finite h_new[0]");
+    TEST(!isnan(h_new[2]) && !isinf(h_new[2]),
+         "tau[2]=2.0 (valid) -> finite h_new[2]");
+
+    /* Invalid tau indices should produce NAN */
+    TEST(isnan(h_new[1]),
+         "tau[1]=0.0 (invalid) -> NAN h_new[1]");
+    TEST(isnan(h_new[3]),
+         "tau[3]=-1.0 (invalid) -> NAN h_new[3]");
+}
+
+void test_cfc_ternary_tau_per_element_all_invalid(void) {
+    printf("\n=== CfC Ternary Per-Element Tau (all invalid) ===\n");
+
+    init_test_weights();
+
+    float tau_per[TEST_HIDDEN_DIM] = {0.0f, -1.0f, -0.5f, 0.0f};
+
+    CfCTernaryParams params = {
+        .input_dim = TEST_INPUT_DIM,
+        .hidden_dim = TEST_HIDDEN_DIM,
+        .W_gate = test_W_gate,
+        .b_gate = test_b_gate,
+        .W_cand = test_W_cand,
+        .b_cand = test_b_cand,
+        .tau = tau_per,
+        .tau_shared = 0,
+    };
+
+    float x[TEST_INPUT_DIM] = {0.5f, -0.3f};
+    float h_prev[TEST_HIDDEN_DIM] = {0.1f, 0.2f, 0.3f, 0.4f};
+    float h_new[TEST_HIDDEN_DIM];
+
+    yinsen_cfc_ternary_cell(x, h_prev, 0.1f, &params, h_new);
+
+    int all_nan = 1;
+    for (int i = 0; i < TEST_HIDDEN_DIM; i++) {
+        if (!isnan(h_new[i])) all_nan = 0;
+    }
+    TEST(all_nan, "All tau <= 0 -> all h_new are NAN");
+}
+
+/* ============================================================================
  * MAIN
  * ============================================================================ */
 
@@ -230,6 +344,9 @@ int main(void) {
     test_cfc_ternary_stability();
     test_cfc_ternary_output();
     test_cfc_ternary_memory();
+    test_cfc_ternary_tau_per_element_valid();
+    test_cfc_ternary_tau_per_element_some_invalid();
+    test_cfc_ternary_tau_per_element_all_invalid();
 
     printf("\n===================================================\n");
     printf("  RESULTS: %d/%d passed\n", tests_passed, tests_run);

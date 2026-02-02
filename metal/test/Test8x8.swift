@@ -62,10 +62,11 @@ class Test8x8 {
     // CPU REFERENCE
     // =========================================================================
     
+    /// Canonical encoding: 00=0, 01=+1, 10=-1, 11=reserved(0)
     func tritSign(_ encoding: UInt8) -> Int {
-        let lsb = Int(encoding & 1)
-        let msb = Int((encoding >> 1) & 1)
-        return lsb * (1 - 2 * msb)
+        if encoding == 1 { return 1 }
+        if encoding == 2 { return -1 }
+        return 0
     }
     
     func cpuDot8(packed: UInt16, x: [Float]) -> Float {
@@ -86,9 +87,10 @@ class Test8x8 {
         return y
     }
     
+    /// Canonical encoding: +1 -> 01, -1 -> 10, 0 -> 00
     func encodeTrit(_ val: Int) -> UInt8 {
         if val > 0 { return 0x1 }
-        if val < 0 { return 0x3 }
+        if val < 0 { return 0x2 }  // 10 (canonical)
         return 0x0
     }
     
@@ -171,8 +173,8 @@ class Test8x8 {
         }
         
         // Test 3: All -1 (row sums to -xSum)
-        // Encoding: 11 11 11 11 11 11 11 11 = 0xFFFF
-        let allNegOnes = [UInt16](repeating: 0xFFFF, count: 8)
+        // Canonical encoding: 10 10 10 10 10 10 10 10 = 0xAAAA
+        let allNegOnes = [UInt16](repeating: 0xAAAA, count: 8)
         if let result = gpuMatvec8x8(W: allNegOnes, x: x) {
             let expected = [Float](repeating: -xSum, count: 8)
             if zip(result, expected).allSatisfy({ abs($0 - $1) < 1e-5 }) {
@@ -202,7 +204,7 @@ class Test8x8 {
         // Test 5: Negation (diagonal -1)
         var negIdentity = [UInt16](repeating: 0, count: 8)
         for i in 0..<8 {
-            negIdentity[i] = UInt16(0x3) << (i * 2)  // -1 at position i
+            negIdentity[i] = UInt16(0x2) << (i * 2)  // -1 at position i (canonical: 10)
         }
         if let result = gpuMatvec8x8(W: negIdentity, x: x) {
             let expected = x.map { -$0 }
@@ -217,8 +219,8 @@ class Test8x8 {
         
         // Test 6: Checkerboard (+1, -1, +1, -1, ...)
         // Row i: alternating starting with +1
-        // 01 11 01 11 01 11 01 11 = 0xDDDD
-        let checkerboard = [UInt16](repeating: 0xDDDD, count: 8)
+        // Canonical: 01 10 01 10 01 10 01 10 = 0x9999
+        let checkerboard = [UInt16](repeating: 0x9999, count: 8)
         if let result = gpuMatvec8x8(W: checkerboard, x: x) {
             // Expected: 1 - 2 + 3 - 4 + 5 - 6 + 7 - 8 = -4
             let expected = [Float](repeating: -4, count: 8)
@@ -232,8 +234,8 @@ class Test8x8 {
         }
         
         // Test 7: First half +1, second half -1
-        // 01 01 01 01 11 11 11 11 = 0xFF55
-        let halfHalf = [UInt16](repeating: 0xFF55, count: 8)
+        // Canonical: 01 01 01 01 10 10 10 10 = 0xAA55
+        let halfHalf = [UInt16](repeating: 0xAA55, count: 8)
         if let result = gpuMatvec8x8(W: halfHalf, x: x) {
             // Expected: (1+2+3+4) - (5+6+7+8) = 10 - 26 = -16
             let expected = [Float](repeating: -16, count: 8)

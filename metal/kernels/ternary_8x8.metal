@@ -7,7 +7,7 @@
  * Key optimizations:
  * - 128-bit weight loads (fills NEON register)
  * - Branchless sign extraction
- * - SIMD reduction for dot products
+ * - Vectorized reduction for dot products (float4/int4 types)
  *
  * Verification status: FORGED (compositional proof from proven dot4)
  */
@@ -19,18 +19,11 @@ using namespace metal;
 // CONSTANTS AND ENCODING
 // =============================================================================
 
-// Trit encoding (matches ternary.h):
+// Canonical trit encoding (matches all backends):
 //   00 = 0  (zero)
 //   01 = +1 (positive)
-//   11 = -1 (negative)
-//   10 = reserved (treated as 0)
-
-// Precomputed masks for branchless sign extraction
-// For a 2-bit encoding: sign = (lsb) * (1 - 2*msb)
-//   00 -> 0 * (1-0) = 0
-//   01 -> 1 * (1-0) = +1
-//   11 -> 1 * (1-2) = -1
-//   10 -> 0 * (1-2) = 0
+//   10 = -1 (negative)
+//   11 = reserved (treated as 0)
 
 // =============================================================================
 // DOT PRODUCT PRIMITIVES
@@ -38,10 +31,9 @@ using namespace metal;
 
 // Proven 4-element dot (from ternary_core.metal)
 // Included here for self-contained kernel
+// Canonical encoding: 00=0, 01=+1, 10=-1, 11=0(reserved)
 inline int trit_sign(uint8_t encoding) {
-    int lsb = encoding & 1;
-    int msb = (encoding >> 1) & 1;
-    return lsb * (1 - 2 * msb);
+    return int(encoding == 1) - int(encoding == 2);
 }
 
 inline float ternary_dot4(uint8_t packed, float4 x) {
@@ -66,8 +58,9 @@ inline float ternary_dot8(uint16_t packed, float4 x_lo, float4 x_hi) {
     return ternary_dot4(packed_lo, x_lo) + ternary_dot4(packed_hi, x_hi);
 }
 
-// Branchless version with explicit SIMD
-inline float ternary_dot8_simd(uint16_t packed, float4 x_lo, float4 x_hi) {
+// Branchless version with vectorized types (float4/int4)
+// Note: Uses ALU-level SIMD types, NOT Metal simdgroup cooperative intrinsics.
+inline float ternary_dot8_vectorized(uint16_t packed, float4 x_lo, float4 x_hi) {
     // Extract all 8 signs at once
     int4 signs_lo, signs_hi;
     
@@ -121,10 +114,11 @@ kernel void ternary_matvec_8x8(
     uint16_t w_row = W[row];
     
     // Compute dot product
-    y[row] = ternary_dot8_simd(w_row, x_lo, x_hi);
+    y[row] = ternary_dot8_vectorized(w_row, x_lo, x_hi);
 }
 
-// Optimized: All 8 rows in one thread (better for small matrices)
+// RETIRED: All 8 rows in one thread. Kept for reference only.
+// Use ternary_matvec_tiled from ternary_matvec_tiled.metal for real work.
 kernel void ternary_matvec_8x8_single(
     device const uint16_t* W [[buffer(0)]],
     device const float* x [[buffer(1)]],
@@ -135,14 +129,14 @@ kernel void ternary_matvec_8x8_single(
     float4 x_hi = float4(x[4], x[5], x[6], x[7]);
     
     // Compute all 8 outputs
-    y[0] = ternary_dot8_simd(W[0], x_lo, x_hi);
-    y[1] = ternary_dot8_simd(W[1], x_lo, x_hi);
-    y[2] = ternary_dot8_simd(W[2], x_lo, x_hi);
-    y[3] = ternary_dot8_simd(W[3], x_lo, x_hi);
-    y[4] = ternary_dot8_simd(W[4], x_lo, x_hi);
-    y[5] = ternary_dot8_simd(W[5], x_lo, x_hi);
-    y[6] = ternary_dot8_simd(W[6], x_lo, x_hi);
-    y[7] = ternary_dot8_simd(W[7], x_lo, x_hi);
+    y[0] = ternary_dot8_vectorized(W[0], x_lo, x_hi);
+    y[1] = ternary_dot8_vectorized(W[1], x_lo, x_hi);
+    y[2] = ternary_dot8_vectorized(W[2], x_lo, x_hi);
+    y[3] = ternary_dot8_vectorized(W[3], x_lo, x_hi);
+    y[4] = ternary_dot8_vectorized(W[4], x_lo, x_hi);
+    y[5] = ternary_dot8_vectorized(W[5], x_lo, x_hi);
+    y[6] = ternary_dot8_vectorized(W[6], x_lo, x_hi);
+    y[7] = ternary_dot8_vectorized(W[7], x_lo, x_hi);
 }
 
 // =============================================================================
@@ -175,7 +169,7 @@ kernel void ternary_matvec_tiled_8x8(
     for (uint b = 0; b < blocks_per_row && col + 8 <= N; b++, col += 8) {
         float4 x_lo = float4(x[col+0], x[col+1], x[col+2], x[col+3]);
         float4 x_hi = float4(x[col+4], x[col+5], x[col+6], x[col+7]);
-        sum += ternary_dot8_simd(w_row[b], x_lo, x_hi);
+        sum += ternary_dot8_vectorized(w_row[b], x_lo, x_hi);
     }
     
     // Handle remainder (if N not divisible by 8)
@@ -216,7 +210,7 @@ kernel void ternary_matvec_8x8_batched(
     float4 x_lo = float4(x_b[0], x_b[1], x_b[2], x_b[3]);
     float4 x_hi = float4(x_b[4], x_b[5], x_b[6], x_b[7]);
     
-    y_b[row] = ternary_dot8_simd(W_b[row], x_lo, x_hi);
+    y_b[row] = ternary_dot8_vectorized(W_b[row], x_lo, x_hi);
 }
 
 // =============================================================================
@@ -282,7 +276,7 @@ kernel void verify_8x8_batch(
     float4 x_hi = float4(x_t[4], x_t[5], x_t[6], x_t[7]);
     
     for (uint row = 0; row < 8; row++) {
-        float computed = ternary_dot8_simd(W_t[row], x_lo, x_hi);
+        float computed = ternary_dot8_vectorized(W_t[row], x_lo, x_hi);
         float expected_val = exp_t[row];
         
         if (abs(computed - expected_val) > epsilon) {

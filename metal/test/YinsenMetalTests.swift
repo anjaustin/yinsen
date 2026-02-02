@@ -34,7 +34,7 @@ class YinsenMetalTests {
             .deletingLastPathComponent()
             .appendingPathComponent("kernels")
         
-        let sourceFiles = ["ternary_core.metal", "activations.metal", "layernorm.metal"]
+        let sourceFiles = ["ternary_core.metal", "ternary_matvec_tiled.metal", "activations.metal", "layernorm.metal"]
         var source = ""
         for file in sourceFiles {
             let path = kernelPath.appendingPathComponent(file)
@@ -53,11 +53,12 @@ class YinsenMetalTests {
     // CPU REFERENCE IMPLEMENTATIONS
     // =========================================================================
     
-    /// Trit sign from 2-bit encoding (matches ternary.h)
+    /// Trit sign from 2-bit canonical encoding (matches trit_encoding.h)
+    /// 00=0, 01=+1, 10=-1, 11=reserved(0)
     func tritSign(_ encoding: UInt8) -> Int {
-        let lsb = Int(encoding & 1)
-        let msb = Int((encoding >> 1) & 1)
-        return lsb * (1 - 2 * msb)
+        if encoding == 1 { return 1 }
+        if encoding == 2 { return -1 }
+        return 0
     }
     
     /// Unpack trit at position from packed byte
@@ -85,10 +86,11 @@ class YinsenMetalTests {
         return y
     }
     
-    /// Encode trit value to 2-bit encoding
+    /// Encode trit value to 2-bit canonical encoding
+    /// +1 -> 01, -1 -> 10, 0 -> 00
     func encodeTrit(_ val: Int) -> UInt8 {
         if val > 0 { return 0x1 }  // 01
-        if val < 0 { return 0x3 }  // 11
+        if val < 0 { return 0x2 }  // 10 (canonical)
         return 0x0                  // 00
     }
     
@@ -324,6 +326,165 @@ class YinsenMetalTests {
         return passed
     }
     
+    /// Test the threadgroup-cooperative tiled kernel
+    func testGPUTiledMatvec() throws -> Bool {
+        print("\n=== GPU Tiled Ternary Matvec Test ===")
+        
+        guard let function = library.makeFunction(name: "ternary_matvec_tiled") else {
+            print("  ERROR: Could not find ternary_matvec_tiled kernel")
+            return false
+        }
+        
+        let pipeline = try device.makeComputePipelineState(function: function)
+        var allPassed = true
+        
+        // Test 1: Identity matrix 4x4 (only +1 on diagonal)
+        do {
+            let M: UInt32 = 4
+            let N: UInt32 = 4
+            let weights: [UInt8] = [0x01, 0x04, 0x10, 0x40]  // +1 at pos 0,1,2,3
+            let input: [Float] = [1.0, 2.0, 3.0, 4.0]
+            let expected: [Float] = [1.0, 2.0, 3.0, 4.0]
+            
+            let result = try runTiledKernel(pipeline: pipeline, weights: weights, input: input, M: Int(M), N: Int(N))
+            let passed = zip(result, expected).allSatisfy { abs($0 - $1) < 1e-5 }
+            print("  Identity 4x4: \(passed ? "PASS" : "FAIL")")
+            if !passed { print("    Expected: \(expected), Got: \(result)"); allPassed = false }
+        }
+        
+        // Test 2: Matrix with -1 values (exercises canonical encoding)
+        do {
+            let M: UInt32 = 4
+            let N: UInt32 = 4
+            // Row 0: [-1, 0, 0, 0] -> packed: 0x02 (canonical: 10 at pos 0)
+            // Row 1: [0, -1, 0, 0] -> packed: 0x08
+            // Row 2: [0, 0, -1, 0] -> packed: 0x20
+            // Row 3: [0, 0, 0, -1] -> packed: 0x80
+            let weights: [UInt8] = [0x02, 0x08, 0x20, 0x80]
+            let input: [Float] = [1.0, 2.0, 3.0, 4.0]
+            let expected: [Float] = [-1.0, -2.0, -3.0, -4.0]
+            
+            let result = try runTiledKernel(pipeline: pipeline, weights: weights, input: input, M: Int(M), N: Int(N))
+            let passed = zip(result, expected).allSatisfy { abs($0 - $1) < 1e-5 }
+            print("  Negation 4x4: \(passed ? "PASS" : "FAIL")")
+            if !passed { print("    Expected: \(expected), Got: \(result)"); allPassed = false }
+        }
+        
+        // Test 3: Mixed +1/-1 row
+        do {
+            let M: UInt32 = 1
+            let N: UInt32 = 4
+            // Row 0: [+1, -1, +1, -1] -> 01 10 01 10 = 0x99
+            let weights: [UInt8] = [0x99]
+            let input: [Float] = [1.0, 2.0, 3.0, 4.0]
+            let expected: [Float] = [1.0 - 2.0 + 3.0 - 4.0]  // -2.0
+            
+            let result = try runTiledKernel(pipeline: pipeline, weights: weights, input: input, M: Int(M), N: Int(N))
+            let passed = zip(result, expected).allSatisfy { abs($0 - $1) < 1e-5 }
+            print("  Mixed +1/-1: \(passed ? "PASS" : "FAIL")")
+            if !passed { print("    Expected: \(expected), Got: \(result)"); allPassed = false }
+        }
+        
+        // Test 4: Larger matrix (16x16) with random weights - fuzz test
+        do {
+            let M = 16
+            let N = 16
+            let bytesPerRow = (N + 3) / 4
+            
+            var passed = true
+            for iter in 0..<1000 {
+                // Generate random trit weights
+                var trits = [[Int]](repeating: [Int](repeating: 0, count: N), count: M)
+                var packedWeights = [UInt8](repeating: 0, count: M * bytesPerRow)
+                
+                for row in 0..<M {
+                    for col in 0..<N {
+                        trits[row][col] = Int.random(in: -1...1)
+                    }
+                    // Pack
+                    for byteIdx in 0..<bytesPerRow {
+                        var packed: UInt8 = 0
+                        for j in 0..<4 {
+                            let col = byteIdx * 4 + j
+                            if col < N {
+                                packed |= encodeTrit(trits[row][col]) << (j * 2)
+                            }
+                        }
+                        packedWeights[row * bytesPerRow + byteIdx] = packed
+                    }
+                }
+                
+                // Random input
+                let input = (0..<N).map { _ in Float.random(in: -10...10) }
+                
+                // CPU reference
+                var expected = [Float](repeating: 0, count: M)
+                for row in 0..<M {
+                    for col in 0..<N {
+                        expected[row] += Float(trits[row][col]) * input[col]
+                    }
+                }
+                
+                // GPU
+                let result = try runTiledKernel(pipeline: pipeline, weights: packedWeights, input: input, M: M, N: N)
+                
+                for i in 0..<M {
+                    if abs(result[i] - expected[i]) > 1e-3 {
+                        if passed {
+                            print("  Fuzz 16x16 FAIL at iter \(iter), row \(i): expected \(expected[i]), got \(result[i])")
+                        }
+                        passed = false
+                    }
+                }
+            }
+            print("  Fuzz 16x16 (1000 iters): \(passed ? "PASS" : "FAIL")")
+            if !passed { allPassed = false }
+        }
+        
+        return allPassed
+    }
+    
+    /// Helper to run the tiled kernel and return results
+    private func runTiledKernel(pipeline: MTLComputePipelineState, weights: [UInt8], input: [Float], M: Int, N: Int) throws -> [Float] {
+        let weightsBuffer = device.makeBuffer(bytes: weights, length: weights.count, options: .storageModeShared)!
+        let inputBuffer = device.makeBuffer(bytes: input, length: input.count * MemoryLayout<Float>.size, options: .storageModeShared)!
+        let outputBuffer = device.makeBuffer(length: M * MemoryLayout<Float>.size, options: .storageModeShared)!
+        
+        var m = UInt32(M)
+        var n = UInt32(N)
+        
+        guard let commandBuffer = commandQueue.makeCommandBuffer(),
+              let encoder = commandBuffer.makeComputeCommandEncoder() else {
+            throw YinsenError.computeError("Could not create command buffer")
+        }
+        
+        encoder.setComputePipelineState(pipeline)
+        encoder.setBuffer(weightsBuffer, offset: 0, index: 0)
+        encoder.setBuffer(inputBuffer, offset: 0, index: 1)
+        encoder.setBuffer(outputBuffer, offset: 0, index: 2)
+        encoder.setBytes(&m, length: MemoryLayout<UInt32>.size, index: 3)
+        encoder.setBytes(&n, length: MemoryLayout<UInt32>.size, index: 4)
+        
+        let threadsPerGroup = min(256, pipeline.maxTotalThreadsPerThreadgroup)
+        let threadgroupSize = MTLSize(width: threadsPerGroup, height: 1, depth: 1)
+        let gridSize = MTLSize(width: M, height: 1, depth: 1)
+        
+        // Shared memory must hold max(N, num_simdgroups) floats
+        // num_simdgroups = ceil(threadsPerGroup/32) = max 8
+        let numSimdgroups = (threadsPerGroup + 31) / 32
+        let sharedMemSize = max(N, numSimdgroups) * MemoryLayout<Float>.size
+        encoder.setThreadgroupMemoryLength(sharedMemSize, index: 0)
+        
+        encoder.dispatchThreadgroups(gridSize, threadsPerThreadgroup: threadgroupSize)
+        
+        encoder.endEncoding()
+        commandBuffer.commit()
+        commandBuffer.waitUntilCompleted()
+        
+        let outputPtr = outputBuffer.contents().bindMemory(to: Float.self, capacity: M)
+        return Array(UnsafeBufferPointer(start: outputPtr, count: M))
+    }
+    
     /// Run all tests
     func runAllTests() throws -> Bool {
         var allPassed = true
@@ -331,8 +492,11 @@ class YinsenMetalTests {
         // Exhaustive CPU verification (proves the algorithm)
         if try !testDot4Exhaustive() { allPassed = false }
         
-        // GPU kernel test (proves the implementation)
+        // GPU kernel test (proves the basic implementation)
         if try !testGPUTernaryMatvec() { allPassed = false }
+        
+        // GPU tiled kernel test (proves the new cooperative kernel)
+        if try !testGPUTiledMatvec() { allPassed = false }
         
         // Full exhaustive 4x4 proof
         if try !testMatvec4x4Exhaustive() { allPassed = false }

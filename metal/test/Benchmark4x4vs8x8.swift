@@ -22,6 +22,7 @@ class Benchmark4x4vs8x8 {
     var pipeline8x8: MTLComputePipelineState?
     var pipeline8x8Single: MTLComputePipelineState?
     var pipelineTiled8x8: MTLComputePipelineState?
+    var pipelineTiledCooperative: MTLComputePipelineState?
     
     init() throws {
         guard let device = MTLCreateSystemDefaultDevice() else {
@@ -34,7 +35,7 @@ class Benchmark4x4vs8x8 {
         }
         self.commandQueue = queue
         
-        // Load both kernel files
+        // Load all kernel files
         let kernelPath = URL(fileURLWithPath: #file)
             .deletingLastPathComponent()
             .deletingLastPathComponent()
@@ -42,9 +43,11 @@ class Benchmark4x4vs8x8 {
         
         let source4x4 = try String(contentsOf: kernelPath.appendingPathComponent("ternary_core.metal"))
         let source8x8 = try String(contentsOf: kernelPath.appendingPathComponent("ternary_8x8.metal"))
+        let sourceTiled = try String(contentsOf: kernelPath.appendingPathComponent("ternary_matvec_tiled.metal"))
         
         let lib4x4 = try device.makeLibrary(source: source4x4, options: nil)
         let lib8x8 = try device.makeLibrary(source: source8x8, options: nil)
+        let libTiled = try device.makeLibrary(source: sourceTiled, options: nil)
         self.library = lib8x8  // Use 8x8 as primary
         
         // Create pipelines
@@ -59,6 +62,9 @@ class Benchmark4x4vs8x8 {
         }
         if let fn = lib8x8.makeFunction(name: "ternary_matvec_tiled_8x8") {
             pipelineTiled8x8 = try device.makeComputePipelineState(function: fn)
+        }
+        if let fn = libTiled.makeFunction(name: "ternary_matvec_tiled") {
+            pipelineTiledCooperative = try device.makeComputePipelineState(function: fn)
         }
         
         print("Benchmark initialized on \(device.name)")
@@ -205,7 +211,7 @@ class Benchmark4x4vs8x8 {
             print("  4×4 tiled: \(String(format: "%.3f", avgLatency)) ms/op, \(String(format: "%.2f", gops)) Gop/s")
         }
         
-        // Using 8×8 tiled
+        // Using 8×8 tiled (one thread per row, sequential K)
         if let pipeline = pipelineTiled8x8 {
             let blocksPerRow = (N + 7) / 8
             let W = device.makeBuffer(length: M * blocksPerRow * 2, options: .storageModeShared)! // 2 bytes per block
@@ -240,6 +246,48 @@ class Benchmark4x4vs8x8 {
             let gops = elementsPerSec / 1e9
             
             print("  8×8 tiled: \(String(format: "%.3f", avgLatency)) ms/op, \(String(format: "%.2f", gops)) Gop/s")
+        }
+        
+        // Using threadgroup-cooperative tiled kernel (shared mem + simd_sum)
+        if let pipeline = pipelineTiledCooperative {
+            let bytesPerRow = (N + 3) / 4
+            let W = device.makeBuffer(length: M * bytesPerRow, options: .storageModeShared)!
+            let x = device.makeBuffer(length: N * 4, options: .storageModeShared)!
+            let y = device.makeBuffer(length: M * 4, options: .storageModeShared)!
+            
+            var m = UInt32(M)
+            var n = UInt32(N)
+            
+            let threadsPerGroup = min(256, pipeline.maxTotalThreadsPerThreadgroup)
+            let numSimdgroups = (threadsPerGroup + 31) / 32
+            let sharedMemSize = max(N, numSimdgroups) * MemoryLayout<Float>.size
+            
+            let start = CFAbsoluteTimeGetCurrent()
+            for _ in 0..<iterations {
+                guard let cmdBuffer = commandQueue.makeCommandBuffer(),
+                      let encoder = cmdBuffer.makeComputeCommandEncoder() else { continue }
+                
+                encoder.setComputePipelineState(pipeline)
+                encoder.setBuffer(W, offset: 0, index: 0)
+                encoder.setBuffer(x, offset: 0, index: 1)
+                encoder.setBuffer(y, offset: 0, index: 2)
+                encoder.setBytes(&m, length: 4, index: 3)
+                encoder.setBytes(&n, length: 4, index: 4)
+                encoder.setThreadgroupMemoryLength(sharedMemSize, index: 0)
+                
+                encoder.dispatchThreadgroups(
+                    MTLSize(width: M, height: 1, depth: 1),
+                    threadsPerThreadgroup: MTLSize(width: threadsPerGroup, height: 1, depth: 1))
+                encoder.endEncoding()
+                cmdBuffer.commit()
+                cmdBuffer.waitUntilCompleted()
+            }
+            let elapsed = CFAbsoluteTimeGetCurrent() - start
+            let avgLatency = (elapsed / Double(iterations)) * 1000
+            let elementsPerSec = Double(M * N * iterations) / elapsed
+            let gops = elementsPerSec / 1e9
+            
+            print("  Cooperative tiled: \(String(format: "%.3f", avgLatency)) ms/op, \(String(format: "%.2f", gops)) Gop/s")
         }
     }
     

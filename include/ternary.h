@@ -1,7 +1,7 @@
 /*
- * YINSEN Ternary - 1.58-bit Weight Computation
+ * YINSEN Ternary - 2-bit Weight Computation
  *
- * Weights are {-1, 0, +1}, requiring log2(3) = 1.58 bits per weight.
+ * Weights are {-1, 0, +1}, stored as 2 bits per weight.
  * Matmul becomes add/subtract - no multiplication needed.
  *
  * Benefits:
@@ -11,14 +11,14 @@
  *   - Hardware-friendly: works on anything with an ALU
  *   - Auditable: every weight is inspectable as -1, 0, or +1
  *
- * Encoding (2 bits per trit):
+ * Encoding (2 bits per trit) - see trit_encoding.h for canonical spec:
  *   00 = 0  (skip - explicit feature filtering)
  *   01 = +1 (add)
- *   11 = -1 (subtract)
- *   10 = reserved
+ *   10 = -1 (subtract)
+ *   11 = reserved (decoded as 0)
  *
  * Note: Zero is not "missing" - it's explicit "ignore this input".
- * This enables feature filtering (BitNet b1.58 insight).
+ * This enables feature filtering as a first-class operation.
  *
  * Verification status: See test_ternary.c
  */
@@ -26,6 +26,7 @@
 #ifndef YINSEN_TERNARY_H
 #define YINSEN_TERNARY_H
 
+#include "trit_encoding.h"
 #include <stdint.h>
 #include <stddef.h>
 #include <math.h>
@@ -41,17 +42,17 @@ extern "C" {
  * We pack 4 trits per byte (2 bits each)
  * ============================================================================ */
 
-#define TRIT_ZERO  0x0  /* 00 */
-#define TRIT_POS   0x1  /* 01 */
-#define TRIT_NEG   0x3  /* 11 */
+/* Encoding constants imported from trit_encoding.h:
+ *   TRIT_ZERO = 0x0 (00), TRIT_POS = 0x1 (01),
+ *   TRIT_NEG = 0x2 (10), TRIT_RESERVED = 0x3 (11)
+ */
 
 /* Extract trit at position (0-3) from packed byte */
 static inline int8_t trit_unpack(uint8_t packed, int pos) {
     uint8_t bits = (packed >> (pos * 2)) & 0x3;
-    if (bits == TRIT_ZERO) return 0;
     if (bits == TRIT_POS)  return 1;
     if (bits == TRIT_NEG)  return -1;
-    return 0;  /* Reserved encoding treated as zero */
+    return 0;  /* TRIT_ZERO or TRIT_RESERVED both map to 0 */
 }
 
 /* Pack trit (-1, 0, +1) into 2-bit encoding */

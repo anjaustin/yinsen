@@ -327,7 +327,7 @@ void test_cfc_extreme_tau(void) {
     float h_prev[2] = {0.5f, 0.5f};
     float h_new[2];
     
-    /* Zero tau -> division by zero! */
+    /* Zero tau -> invalid, should produce NaN */
     float tau_zero[1] = {0.0f};
     CfCTernaryParams params_zero = {
         .input_dim = in_dim, .hidden_dim = hid_dim,
@@ -339,13 +339,8 @@ void test_cfc_extreme_tau(void) {
     yinsen_cfc_ternary_cell(x, h_prev, 0.1f, &params_zero, h_new);
     printf("  Zero tau: h_new = [%.4f, %.4f]\n", h_new[0], h_new[1]);
     
-    /* This produces Inf or NaN depending on implementation */
-    int zero_tau_ok = IS_FINITE(h_new[0]) && IS_FINITE(h_new[1]);
-    if (!zero_tau_ok) {
-        EXPECT_FAIL("Zero tau causes Inf/NaN - should validate tau > 0");
-    } else {
-        TEST(0, "Zero tau should produce Inf but didn't?");
-    }
+    /* Zero tau is invalid - should produce NaN */
+    TEST(isnan(h_new[0]) && isnan(h_new[1]), "Zero tau produces NaN (invalid tau rejected)");
     
     /* Very small tau -> fast decay */
     float tau_tiny[1] = {1e-10f};
@@ -409,8 +404,8 @@ void test_sparsity_edge_cases(void) {
     TEST(stats.sparsity == 0.0f, "All +1 -> 0% sparse");
     TEST(stats.positive == 8, "All +1 count = 8");
     
-    /* All -1 (11111111 = 0xFF) */
-    uint8_t all_neg[2] = {0xFF, 0xFF};
+    /* All -1: canonical encoding 10 = 0x2, so 10101010 = 0xAA */
+    uint8_t all_neg[2] = {0xAA, 0xAA};
     ternary_stats(all_neg, 8, &stats);
     TEST(stats.sparsity == 0.0f, "All -1 -> 0% sparse");
     TEST(stats.negative == 8, "All -1 count = 8");
@@ -421,15 +416,15 @@ void test_sparsity_edge_cases(void) {
  * ============================================================================ */
 
 void test_reserved_encoding(void) {
-    printf("\n=== Falsify: Reserved Encoding (10) ===\n");
+    printf("\n=== Falsify: Reserved Encoding (11) ===\n");
     
-    /* Encoding 10 (binary) = 2 (decimal) is reserved */
+    /* Canonical encoding: 11 (binary) = 3 (decimal) is reserved */
     /* What happens if we encounter it? */
     
-    uint8_t with_reserved = 0x02; /* 00000010 = pos 0 has reserved encoding */
+    uint8_t with_reserved = 0x03; /* 00000011 = pos 0 has reserved encoding (11) */
     
     int8_t trit = trit_unpack(with_reserved, 0);
-    TEST(trit == 0, "Reserved encoding (10) treated as 0");
+    TEST(trit == 0, "Reserved encoding (11) treated as 0");
     
     /* Dot product with reserved encoding */
     float x[4] = {100.0f, 1.0f, 1.0f, 1.0f};
