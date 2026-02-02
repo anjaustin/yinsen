@@ -6,7 +6,9 @@
  * Batch operations to amortize this cost.
  *
  * IMPORTANT: NEON/FP registers are NOT preserved across mode transitions.
- * Results must be saved to GPRs or memory before SMSTOP.
+ * SMSTART SM zeroes all Z/V/FP registers (including callee-saved q8-q15).
+ * SMSTOP SM zeroes them again. We must save q8-q15 before SMSTART and
+ * restore after SMSTOP to comply with AAPCS64 calling convention.
  *
  * Copyright 2026 Trix Research
  */
@@ -29,103 +31,116 @@
  *
  * Returns:
  *   s0 = dot product result
- *
- * Note: This function has ~65ns overhead from mode transitions.
- * Use sme_dot16_batch_asm for better throughput.
  */
 _sme_dot16_asm:
-    smstart sm                      // Enter streaming mode
-    
+    /* Save callee-saved NEON regs (destroyed by smstart/smstop) */
+    stp q8, q9, [sp, #-128]!
+    stp q10, q11, [sp, #32]
+    stp q12, q13, [sp, #64]
+    stp q14, q15, [sp, #96]
+
+    smstart sm
+
     mov x8, #16
-    whilelo p0.s, xzr, x8           // p0 = predicate for 16 elements
-    
-    ld1w {z0.s}, p0/z, [x0]         // Load 16 floats
-    
-    index z1.s, #0, #1              // z1 = {0, 1, 2, ..., 15}
-    lsl z1.s, z1.s, #1              // z1 = {0, 2, 4, ..., 30} bit positions
-    
-    mov z2.s, w1                    // Broadcast weights
-    lsrr z1.s, p0/m, z1.s, z2.s     // Extract trits
+    whilelo p0.s, xzr, x8
+
+    ld1w {z0.s}, p0/z, [x0]
+
+    index z1.s, #0, #1
+    lsl z1.s, z1.s, #1
+
+    mov z2.s, w1
+    lsrr z1.s, p0/m, z1.s, z2.s
     and z1.s, z1.s, #3
-    
-    cmpeq p1.s, p0/z, z1.s, #1      // p1 = where weight is +1
-    cmpeq p2.s, p0/z, z1.s, #2      // p2 = where weight is -1
-    
-    faddv s1, p1, z0.s              // Sum positives
-    faddv s2, p2, z0.s              // Sum negatives
-    fsub s0, s1, s2                 // Result = pos - neg
-    
-    fmov w9, s0                     // Save to GPR before mode exit
-    
-    smstop sm                       // Exit streaming mode
-    
-    fmov s0, w9                     // Return result
+
+    cmpeq p1.s, p0/z, z1.s, #1
+    cmpeq p2.s, p0/z, z1.s, #2
+
+    faddv s1, p1, z0.s
+    faddv s2, p2, z0.s
+    fsub s0, s1, s2
+
+    fmov w9, s0
+
+    smstop sm
+
+    /* Restore callee-saved NEON regs */
+    ldp q14, q15, [sp, #96]
+    ldp q12, q13, [sp, #64]
+    ldp q10, q11, [sp, #32]
+    ldp q8, q9, [sp], #128
+
+    fmov s0, w9
     ret
 
 
 /*
- * void sme_dot16_batch_asm(float* results, const float* activations, 
+ * void sme_dot16_batch_asm(float* results, const float* activations,
  *                          const uint32_t* weights, uint32_t count)
  *
  * Computes 'count' ternary dot products in a single streaming session.
- * Much faster than calling sme_dot16_asm in a loop.
  *
  * Inputs:
  *   x0 = output array (count floats)
- *   x1 = input activations (count * 16 floats, 64-byte aligned preferred)
+ *   x1 = input activations (count * 16 floats)
  *   x2 = packed weights (count uint32s)
  *   w3 = number of dot products
- *
- * Throughput: ~14ns per dot16 (vs 65ns single)
  */
 _sme_dot16_batch_asm:
-    cbz w3, .Lbatch_done            // Early exit if count == 0
-    
-    stp x19, x20, [sp, #-32]!
+    cbz w3, .Lbatch_done
+
+    stp x19, x20, [sp, #-160]!
     stp x21, x22, [sp, #16]
-    
-    mov x19, x0                     // results
-    mov x20, x1                     // activations
-    mov x21, x2                     // weights
-    mov w22, w3                     // count
-    
+    stp q8, q9, [sp, #32]
+    stp q10, q11, [sp, #64]
+    stp q12, q13, [sp, #96]
+    stp q14, q15, [sp, #128]
+
+    mov x19, x0
+    mov x20, x1
+    mov x21, x2
+    mov w22, w3
+
     smstart sm
-    
+
     mov x8, #16
-    whilelo p0.s, xzr, x8           // p0 = first 16 elements
-    
+    whilelo p0.s, xzr, x8
+
 .Lbatch_loop:
-    ld1w {z0.s}, p0/z, [x20]        // Load 16 floats
-    ldr w9, [x21]                   // Load weight
-    
-    // Extract and compare trits
+    ld1w {z0.s}, p0/z, [x20]
+    ldr w9, [x21]
+
     index z1.s, #0, #1
     lsl z1.s, z1.s, #1
     mov z2.s, w9
     lsrr z1.s, p0/m, z1.s, z2.s
     and z1.s, z1.s, #3
-    
-    cmpeq p1.s, p0/z, z1.s, #1      // +1 positions
-    cmpeq p2.s, p0/z, z1.s, #2      // -1 positions
-    
+
+    cmpeq p1.s, p0/z, z1.s, #1
+    cmpeq p2.s, p0/z, z1.s, #2
+
     faddv s1, p1, z0.s
     faddv s2, p2, z0.s
     fsub s0, s1, s2
-    
-    str s0, [x19]                   // Store result
-    
-    add x20, x20, #64               // Next 16 floats
-    add x21, x21, #4                // Next weight
-    add x19, x19, #4                // Next result
-    
+
+    str s0, [x19]
+
+    add x20, x20, #64
+    add x21, x21, #4
+    add x19, x19, #4
+
     subs w22, w22, #1
     b.ne .Lbatch_loop
-    
+
     smstop sm
-    
+
+    ldp q14, q15, [sp, #128]
+    ldp q12, q13, [sp, #96]
+    ldp q10, q11, [sp, #64]
+    ldp q8, q9, [sp, #32]
     ldp x21, x22, [sp, #16]
-    ldp x19, x20, [sp], #32
-    
+    ldp x19, x20, [sp], #160
+
 .Lbatch_done:
     ret
 
@@ -135,63 +150,67 @@ _sme_dot16_batch_asm:
  *                           const float* input)
  *
  * Computes 16x16 matrix-vector multiplication with ternary weights.
- * output[i] = sum_j(decode(weights[i,j]) * input[j])
+ * All 16 rows processed in a single streaming session.
  *
  * Inputs:
  *   x0 = output array (16 floats)
  *   x1 = weights (16 uint32s, each with 16 x 2-bit trits)
  *   x2 = input vector (16 floats)
- *
- * This processes all 16 rows in a single streaming session.
  */
 _sme_matvec_16x16_asm:
-    stp x19, x20, [sp, #-32]!
+    stp x19, x20, [sp, #-160]!
     stp x21, x22, [sp, #16]
-    
-    mov x19, x0                     // output
-    mov x20, x1                     // weights
-    mov x21, x2                     // input
-    mov w22, #16                    // row count
-    
+    stp q8, q9, [sp, #32]
+    stp q10, q11, [sp, #64]
+    stp q12, q13, [sp, #96]
+    stp q14, q15, [sp, #128]
+
+    mov x19, x0
+    mov x20, x1
+    mov x21, x2
+    mov w22, #16
+
     smstart sm
-    
+
     mov x8, #16
     whilelo p0.s, xzr, x8
-    
-    // Load input vector once
+
     ld1w {z3.s}, p0/z, [x21]
-    
-    // Pre-compute index and shift vectors
-    index z4.s, #0, #1              // {0,1,2,...,15}
-    lsl z4.s, z4.s, #1              // {0,2,4,...,30}
-    
+
+    index z4.s, #0, #1
+    lsl z4.s, z4.s, #1
+
 .Lmv_loop:
-    ldr w9, [x20]                   // Load row weights
-    
-    mov z2.s, w9                    // Broadcast
-    mov z1.d, z4.d                  // Copy shift pattern (use .d for full copy)
-    lsrr z1.s, p0/m, z1.s, z2.s     // Extract trits
+    ldr w9, [x20]
+
+    mov z2.s, w9
+    mov z1.d, z4.d
+    lsrr z1.s, p0/m, z1.s, z2.s
     and z1.s, z1.s, #3
-    
+
     cmpeq p1.s, p0/z, z1.s, #1
     cmpeq p2.s, p0/z, z1.s, #2
-    
-    faddv s1, p1, z3.s              // Sum where +1
-    faddv s2, p2, z3.s              // Sum where -1
+
+    faddv s1, p1, z3.s
+    faddv s2, p2, z3.s
     fsub s0, s1, s2
-    
-    str s0, [x19]                   // Store output row
-    
-    add x20, x20, #4                // Next row weights
-    add x19, x19, #4                // Next output
-    
+
+    str s0, [x19]
+
+    add x20, x20, #4
+    add x19, x19, #4
+
     subs w22, w22, #1
     b.ne .Lmv_loop
-    
+
     smstop sm
-    
+
+    ldp q14, q15, [sp, #128]
+    ldp q12, q13, [sp, #96]
+    ldp q10, q11, [sp, #64]
+    ldp q8, q9, [sp, #32]
     ldp x21, x22, [sp, #16]
-    ldp x19, x20, [sp], #32
+    ldp x19, x20, [sp], #160
     ret
 
 
@@ -202,45 +221,29 @@ _sme_matvec_16x16_asm:
  * Computes 32x32 matrix-vector multiplication with ternary weights.
  * Tiled as 2x2 grid of 16x16 tiles, single streaming session.
  *
- * output[i] = sum_j(decode(weights[i,j]) * input[j])  for i,j in 0..31
- *
- * Inputs:
- *   x0 = output array (32 floats, 128 bytes)
- *   x1 = weights (64 uint32s: 4 tiles of 16, layout [T00 T01 T10 T11])
- *        T00 = rows 0-15,  cols 0-15   (16 uint32s)
- *        T01 = rows 0-15,  cols 16-31  (16 uint32s)
- *        T10 = rows 16-31, cols 0-15   (16 uint32s)
- *        T11 = rows 16-31, cols 16-31  (16 uint32s)
- *   x2 = input vector (32 floats, 128 bytes)
- *
- * Strategy:
- *   Load both input halves (z3=input[0:15], z5=input[16:31]) once.
- *   For each output row i:
- *     partial_left  = dot16(input[0:15],  weights_left_tile[i])
- *     partial_right = dot16(input[16:31], weights_right_tile[i])
- *     output[i] = partial_left + partial_right
- *
- *   Process rows 0-15 using T00+T01, then rows 16-31 using T10+T11.
- *   Single smstart/smstop pair for the whole 32x32.
+ * Weight layout: [T00 T01 T10 T11], each tile 16 uint32s.
+ *   T00 = rows 0-15,  cols 0-15
+ *   T01 = rows 0-15,  cols 16-31
+ *   T10 = rows 16-31, cols 0-15
+ *   T11 = rows 16-31, cols 16-31
  *
  * Register plan:
- *   z3 = input[0:15]   (persistent)
+ *   z3 = input[0:15]   (persistent, accessed via z6 copy to avoid
+ *        scalar write clobber — faddv scalar dest zeroes full Z reg)
  *   z4 = shift pattern  (persistent)
- *   z5 = input[16:31]  (persistent)
- *   z0, z1, z2 = temporaries for trit extraction
+ *   z5 = input[16:31]  (persistent, same z6 copy rule)
+ *   z0, z1, z2, z6 = temporaries
  *   p0 = all-16 predicate (persistent)
  *   p1, p2 = +1/-1 predicates (per-row)
- *   s0, s1, s2, s3 = scalar accumulators
- *
- *   x19 = output pointer (advancing)
- *   x20 = left tile pointer (advancing)
- *   x23 = right tile pointer (advancing)
- *   x22 = row counter
  */
 _sme_matvec_32x32_asm:
-    stp x19, x20, [sp, #-48]!
+    stp x19, x20, [sp, #-176]!
     stp x21, x22, [sp, #16]
     stp x23, x24, [sp, #32]
+    stp q8, q9, [sp, #48]
+    stp q10, q11, [sp, #80]
+    stp q12, q13, [sp, #112]
+    stp q14, q15, [sp, #144]
 
     mov x19, x0                     // output
     mov x20, x1                     // weights base (T00)
@@ -253,16 +256,15 @@ _sme_matvec_32x32_asm:
 
     // Load both input halves — persistent across all 32 rows
     ld1w {z3.s}, p0/z, [x21]        // input[0:15]
-    add x9, x21, #64                // input + 16 floats = input + 64 bytes
+    add x9, x21, #64
     ld1w {z5.s}, p0/z, [x9]         // input[16:31]
 
     // Pre-compute shift pattern — persistent
-    index z4.s, #0, #1              // {0,1,2,...,15}
-    lsl z4.s, z4.s, #1              // {0,2,4,...,30}
+    index z4.s, #0, #1
+    lsl z4.s, z4.s, #1
 
     // ─── Rows 0-15: T00 (left) + T01 (right) ───
-    // x20 points to T00 (weights + 0)
-    add x23, x20, #64               // T01 = weights + 16 uint32s = weights + 64 bytes
+    add x23, x20, #64               // T01
     mov w22, #16
 
 .Lmv32_upper_loop:
@@ -274,11 +276,11 @@ _sme_matvec_32x32_asm:
     and z1.s, z1.s, #3
     cmpeq p1.s, p0/z, z1.s, #1
     cmpeq p2.s, p0/z, z1.s, #2
-    mov z6.d, z3.d                  // Copy input left to temp (protect z3)
-    faddv s0, p1, z6.s              // Sum positives from copy
-    mov z6.d, z3.d                  // Re-copy (faddv may zero upper lanes of z6)
-    faddv s1, p2, z6.s              // Sum negatives from copy
-    fsub s0, s0, s1                 // partial_left in s0
+    mov z6.d, z3.d                  // Copy input left (protect z3)
+    faddv s0, p1, z6.s
+    mov z6.d, z3.d                  // Re-copy
+    faddv s1, p2, z6.s
+    fsub s0, s0, s1
     fmov w10, s0                    // Save partial_left to GPR
 
     // Right half: dot16(input[16:31], T01[row])
@@ -289,14 +291,14 @@ _sme_matvec_32x32_asm:
     and z1.s, z1.s, #3
     cmpeq p1.s, p0/z, z1.s, #1
     cmpeq p2.s, p0/z, z1.s, #2
-    mov z6.d, z5.d                  // Copy input right to temp (protect z5)
+    mov z6.d, z5.d                  // Copy input right (protect z5)
     faddv s0, p1, z6.s
     mov z6.d, z5.d
     faddv s1, p2, z6.s
-    fsub s0, s0, s1                 // partial_right in s0
+    fsub s0, s0, s1
 
     // Sum and store
-    fmov s1, w10                    // Restore partial_left
+    fmov s1, w10
     fadd s0, s1, s0
     str s0, [x19]
 
@@ -307,17 +309,12 @@ _sme_matvec_32x32_asm:
     b.ne .Lmv32_upper_loop
 
     // ─── Rows 16-31: T10 (left) + T11 (right) ───
-    // x20 now points to T01 end = T10 start (weights + 32 uint32s = weights + 128)
-    // x23 now points to T01 end + 64 = T11 start (weights + 48 uint32s = weights + 192)
-    // Actually: x20 advanced 16*4=64 bytes past T00 start, so x20 = weights+64 = T01
-    // We need T10 = weights + 128, T11 = weights + 192
     mov x20, x1
     add x20, x20, #128              // T10 = weights + 32*4
     add x23, x20, #64               // T11 = T10 + 16*4
     mov w22, #16
 
 .Lmv32_lower_loop:
-    // Left half: dot16(input[0:15], T10[row])
     ldr w9, [x20]
     mov z2.s, w9
     mov z1.d, z4.d
@@ -329,10 +326,9 @@ _sme_matvec_32x32_asm:
     faddv s0, p1, z6.s
     mov z6.d, z3.d
     faddv s1, p2, z6.s
-    fsub s0, s0, s1                 // partial_left
+    fsub s0, s0, s1
     fmov w10, s0
 
-    // Right half: dot16(input[16:31], T11[row])
     ldr w9, [x23]
     mov z2.s, w9
     mov z1.d, z4.d
@@ -344,9 +340,8 @@ _sme_matvec_32x32_asm:
     faddv s0, p1, z6.s
     mov z6.d, z5.d
     faddv s1, p2, z6.s
-    fsub s0, s0, s1                 // partial_right
+    fsub s0, s0, s1
 
-    // Sum and store
     fmov s1, w10
     fadd s0, s1, s0
     str s0, [x19]
@@ -359,7 +354,11 @@ _sme_matvec_32x32_asm:
 
     smstop sm
 
+    ldp q14, q15, [sp, #144]
+    ldp q12, q13, [sp, #112]
+    ldp q10, q11, [sp, #80]
+    ldp q8, q9, [sp, #48]
     ldp x23, x24, [sp, #32]
     ldp x21, x22, [sp, #16]
-    ldp x19, x20, [sp], #48
+    ldp x19, x20, [sp], #176
     ret
