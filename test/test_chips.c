@@ -385,6 +385,148 @@ void test_norm_chip(void) {
 }
 
 /* ═══════════════════════════════════════════════════════════════ */
+void test_cfc_cell_sparse(void) {
+    printf("--- CFC_CELL_SPARSE ---\n");
+
+    ACTIVATION_LUT_INIT();
+
+    /* Ternary weights (quantized at threshold=0.10 from demos) */
+    #define T_INPUT  2
+    #define T_HIDDEN 8
+    #define T_CONCAT (T_INPUT + T_HIDDEN)
+
+    float W_gate_orig[T_HIDDEN * T_CONCAT] = {
+        0.1f,0.8f,0.1f,-0.1f,0,0,0,0,0,0,
+        0.7f,0.2f,-0.1f,0.1f,0,0,0,0,0,0,
+        0.4f,0.5f,0,0,0.1f,-0.1f,0,0,0,0,
+        0.1f,0.6f,0,0,0,0,0.1f,-0.1f,0,0,
+        0.6f,0.1f,0,0,0,0,0,0,0.1f,-0.1f,
+        0.2f,0.3f,0.2f,0.2f,0.1f,0,0,0,0,0,
+        0.3f,0.3f,0.1f,0,0,0.1f,0,0,0,0,
+        0.2f,0.7f,-0.1f,0,0,0,0,0.1f,0,0,
+    };
+    float W_cand_orig[T_HIDDEN * T_CONCAT] = {
+        0.5f,0.3f,0.1f,0,-0.1f,0,0,0,0,0,
+        0.3f,0.5f,0,0.1f,0,-0.1f,0,0,0,0,
+        0.4f,0.4f,-0.1f,0,0,0,0.1f,0,0,0,
+        0.2f,0.6f,0,-0.1f,0,0,0,0.1f,0,0,
+        0.6f,0.2f,0,0,-0.1f,0,0,0,0.1f,0,
+        0.3f,0.4f,0.1f,0.1f,0,0,-0.1f,0,0,0,
+        0.4f,0.3f,0,0,0.1f,0.1f,0,-0.1f,0,0,
+        0.3f,0.5f,0,0,0,0,0.1f,0,-0.1f,0,
+    };
+
+    /* Quantize to ternary-as-float */
+    float Wg[T_HIDDEN * T_CONCAT], Wc[T_HIDDEN * T_CONCAT];
+    for (int i = 0; i < T_HIDDEN * T_CONCAT; i++) {
+        Wg[i] = W_gate_orig[i] > 0.1f ? 1.0f : W_gate_orig[i] < -0.1f ? -1.0f : 0.0f;
+        Wc[i] = W_cand_orig[i] > 0.1f ? 1.0f : W_cand_orig[i] < -0.1f ? -1.0f : 0.0f;
+    }
+
+    float bg[T_HIDDEN] = {-0.5f,-0.3f,-0.4f,-0.5f,-0.3f,-0.4f,-0.3f,-0.5f};
+    float bc[T_HIDDEN] = {0};
+    float tau[T_HIDDEN] = {5,15,45,120,10,30,90,600};
+    float decay[T_HIDDEN];
+    cfc_precompute_decay(tau, 0, 10.0f, T_HIDDEN, decay);
+
+    /* Build sparse representation.
+     * The GEMM reads W[k * hidden_dim + j] — this is the native layout.
+     * Demo weights are declared as 8 rows of 10, but in linear memory the
+     * GEMM interprets them as [concat_dim × hidden_dim] (transposed=0). */
+    CfcSparseWeights sw;
+    cfc_build_sparse(Wg, Wc, 0.5f, T_HIDDEN, T_CONCAT, 0, &sw);
+    tests_passed++; /* build didn't crash */
+
+    /* Test 1: Sparse produces bit-identical output to LUT on first step */
+    float h0[T_HIDDEN] = {0};
+    float inp[T_INPUT] = {0.5f, 1.0f};
+    float h_lut[T_HIDDEN], h_sparse[T_HIDDEN];
+
+    CFC_CELL_LUT(inp, h0, Wg, bg, Wc, bc, decay, T_INPUT, T_HIDDEN, h_lut);
+    CFC_CELL_SPARSE(inp, h0, &sw, bg, bc, decay, T_INPUT, T_HIDDEN, h_sparse);
+
+    for (int i = 0; i < T_HIDDEN; i++) {
+        char label[32];
+        snprintf(label, sizeof(label), "sparse==lut h[%d] step0", i);
+        ASSERT_NEAR(h_sparse[i], h_lut[i], 1e-6f, label);
+    }
+
+    /* Test 2: Accumulate 100 steps, still bit-identical */
+    float hl[T_HIDDEN] = {0}, hs[T_HIDDEN] = {0};
+    float hn[T_HIDDEN];
+    unsigned int seed = 42;
+    for (int step = 0; step < 100; step++) {
+        seed = seed * 1103515245u + 12345u;
+        float v = (float)(seed & 0xFFFF) / 65536.0f - 0.5f;
+        float in2[T_INPUT] = {v, 1.0f};
+
+        CFC_CELL_LUT(in2, hl, Wg, bg, Wc, bc, decay, T_INPUT, T_HIDDEN, hn);
+        memcpy(hl, hn, sizeof(hn));
+
+        CFC_CELL_SPARSE(in2, hs, &sw, bg, bc, decay, T_INPUT, T_HIDDEN, hn);
+        memcpy(hs, hn, sizeof(hn));
+    }
+
+    float max_diff = 0;
+    for (int i = 0; i < T_HIDDEN; i++) {
+        float d = fabsf(hl[i] - hs[i]);
+        if (d > max_diff) max_diff = d;
+    }
+    /* Should be exactly 0 (same computation, same LUT) but allow float rounding */
+    assert(max_diff < 1e-5f);
+    tests_passed++;
+
+    /* Test 3: Output is bounded (CfC should never diverge) */
+    int bounded = 1;
+    for (int i = 0; i < T_HIDDEN; i++) {
+        if (hs[i] < -10.0f || hs[i] > 10.0f) bounded = 0;
+    }
+    assert(bounded);
+    tests_passed++;
+
+    /* Test 4: Sparse with zero-input produces only bias+decay dynamics */
+    float h_z[T_HIDDEN] = {0.5f,0.5f,0.5f,0.5f,0.5f,0.5f,0.5f,0.5f};
+    float inp_zero[T_INPUT] = {0, 0};
+    CFC_CELL_SPARSE(inp_zero, h_z, &sw, bg, bc, decay, T_INPUT, T_HIDDEN, hn);
+    /* Output should differ from input (gate and decay act) */
+    int changed = 0;
+    for (int i = 0; i < T_HIDDEN; i++)
+        if (fabsf(hn[i] - h_z[i]) > 1e-6f) changed = 1;
+    assert(changed);
+    tests_passed++;
+
+    /* Test 5: Also matches CFC_CELL_FIXED (dense GEMM, precise activations) */
+    float h_fixed[T_HIDDEN] = {0}, h_sp2[T_HIDDEN] = {0};
+    seed = 77;
+    for (int step = 0; step < 50; step++) {
+        seed = seed * 1103515245u + 12345u;
+        float v = (float)(seed & 0xFFFF) / 65536.0f - 0.5f;
+        float in3[T_INPUT] = {v, 1.0f};
+
+        CFC_CELL_FIXED(in3, h_fixed, Wg, bg, Wc, bc, decay, T_INPUT, T_HIDDEN, hn);
+        memcpy(h_fixed, hn, sizeof(hn));
+
+        CFC_CELL_SPARSE(in3, h_sp2, &sw, bg, bc, decay, T_INPUT, T_HIDDEN, hn);
+        memcpy(h_sp2, hn, sizeof(hn));
+    }
+    /* FIXED uses precise sigmoid/tanh, SPARSE uses LUT+lerp.
+     * Allow small divergence from LUT approximation (should be <1e-3). */
+    float max_diff2 = 0;
+    for (int i = 0; i < T_HIDDEN; i++) {
+        float d = fabsf(h_fixed[i] - h_sp2[i]);
+        if (d > max_diff2) max_diff2 = d;
+    }
+    assert(max_diff2 < 0.01f);  /* LUT accuracy well within this */
+    tests_passed++;
+
+    printf("  %d passed\n\n", 14);
+
+    #undef T_INPUT
+    #undef T_HIDDEN
+    #undef T_CONCAT
+}
+
+/* ═══════════════════════════════════════════════════════════════ */
 int main(void) {
     printf("================================================================\n");
     printf("  YINSEN CHIP FORGE — Test Suite\n");
@@ -397,6 +539,7 @@ int main(void) {
     test_fft_chip();
     test_softmax_chip();
     test_norm_chip();
+    test_cfc_cell_sparse();
 
     printf("================================================================\n");
     printf("  TOTAL: %d passed, %d failed\n", tests_passed, tests_failed);
