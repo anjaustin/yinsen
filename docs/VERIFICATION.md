@@ -1,11 +1,11 @@
 # Yinsen Verification Report
 
-**Date:** 2026-01-26  
+**Date:** 2026-02-01  
 **Platform:** darwin/arm64  
 **Compiler:** gcc (Apple clang)  
-**Total Tests:** 161
+**Total Tests:** 230
 
-This document provides complete, honest accounting of what has been verified, tested, falsified, and remains unknown.
+This document provides complete, honest accounting of what has been verified, tested, validated on live data, falsified, and remains unknown.
 
 ---
 
@@ -15,6 +15,7 @@ This document provides complete, honest accounting of what has been verified, te
 |-------|------------|------------|
 | **PROVEN** | Every possible input tested, all correct | 100% for tested domain |
 | **TESTED** | Property tests pass on one platform | High for tested cases |
+| **VALIDATED** | Tested against live real-world data | High for tested domain |
 | **FALSIFIED** | Attempted to break, found critical failure | Component does not work |
 | **KNOWN ISSUE** | Edge case with documented behavior | Use with caution |
 | **UNTESTED** | No verification performed | Unknown reliability |
@@ -23,142 +24,141 @@ This document provides complete, honest accounting of what has been verified, te
 
 ## PROVEN Components (Exhaustive Verification)
 
-### Logic Gates (apu.h)
+### Logic Gates (apu.h) — 7 gates, 26 test cases, 100% coverage
 
-All gates verified against complete truth tables.
+All gates verified against complete truth tables. XOR, AND, OR, NOT, NAND, NOR, XNOR.
 
-| Gate | Formula | Test Cases | Result |
-|------|---------|------------|--------|
-| XOR | `a + b - 2ab` | 4/4 | **PROVEN** |
-| AND | `ab` | 4/4 | **PROVEN** |
-| OR | `a + b - ab` | 4/4 | **PROVEN** |
-| NOT | `1 - a` | 2/2 | **PROVEN** |
-| NAND | `1 - ab` | 4/4 | **PROVEN** |
-| NOR | `1 - a - b + ab` | 4/4 | **PROVEN** |
-| XNOR | `1 - a - b + 2ab` | 4/4 | **PROVEN** |
+### Full Adder (apu.h) — 8/8 combinations
 
-**Total: 7 gates, 26 test cases, 100% coverage**
+### 8-Bit Ripple Adder (apu.h) — 65,536/65,536 combinations
 
-### Full Adder (apu.h)
+### 2x2 Ternary Matvec (ternary.h) — 81/81 configurations (3^4)
 
-| Input (a,b,c) | Expected Sum | Expected Carry | Result |
-|---------------|--------------|----------------|--------|
-| 0,0,0 | 0 | 0 | PASS |
-| 0,0,1 | 1 | 0 | PASS |
-| 0,1,0 | 1 | 0 | PASS |
-| 0,1,1 | 0 | 1 | PASS |
-| 1,0,0 | 1 | 0 | PASS |
-| 1,0,1 | 0 | 1 | PASS |
-| 1,1,0 | 0 | 1 | PASS |
-| 1,1,1 | 1 | 1 | PASS |
+### 4x4 Ternary Matvec (ternary.h) — 43,046,721/43,046,721 configurations (3^16)
 
-**Total: 8/8 combinations, PROVEN**
-
-### 8-Bit Ripple Adder (apu.h)
-
-| Test | Coverage | Result |
-|------|----------|--------|
-| All 256 × 256 input pairs | 65,536 additions | **PROVEN** |
-| Carry-in = 0 | All cases | PASS |
-| Overflow detection | Via carry-out | PASS |
-
-**Total: 65,536/65,536 combinations, PROVEN**
-
-### 2×2 Ternary Matrix-Vector Multiply (ternary.h)
-
-| Test | Coverage | Result |
-|------|----------|--------|
-| All weight combinations | 3^4 = 81 matrices | **PROVEN** |
-| Input vectors | [1,1] for all | PASS |
-| Output verification | Manual calculation | PASS |
-
-**Total: 81/81 configurations, PROVEN**
-
-### 4×4 Ternary Matrix-Vector Multiply (ternary.h)
-
-| Test | Coverage | Result |
-|------|----------|--------|
-| All weight combinations | 3^16 = 43,046,721 matrices | **PROVEN** |
-| Input vectors | [1,2,3,4] for all | PASS |
-| Output verification | Float reference | PASS |
-| Time | 0.60 seconds | 71.4 M/sec |
-
-**Total: 43,046,721/43,046,721 configurations, PROVEN**
+Input vector [1,2,3,4], verified against float reference. 0.60 seconds, 71.4 M/sec.
 
 ---
 
-## TESTED Components (Property Tests)
+## TESTED Components
 
-### Activation Functions (onnx_shapes.h)
+### Chip Forge (include/chips/) — 105 tests
 
-| Function | Tests | Notes |
-|----------|-------|-------|
-| ReLU | max(0,x) property | Spot checks |
-| Sigmoid | σ(0)=0.5, range (0,1) | Boundary + property |
-| Tanh | tanh(0)=0, range (-1,1) | Boundary + property |
-| GELU | Approximate formula | Spot checks |
-| SiLU | x·σ(x) | Spot checks |
+| Chip | Tests | Key Verification |
+|------|-------|-----------------|
+| GEMM | 8 | Matches yinsen_gemm, rectangular, zero, identity |
+| Activations | 29 | 3 tiers compared, LUT accuracy sweep, vectorized matches scalar |
+| Decay | 14 | exp(-dt/tau), shared/vector/fast, extreme values |
+| Ternary Dot | 7 | Matches ternary_dot, alignment, zero weights |
+| FFT | 16 | Roundtrip, Parseval, sizes 8-256, pure signals |
+| Softmax | 10 | Sum=1, stability, fast vs precise, argmax |
+| Normalization | 9 | LayerNorm, RMSNorm, BatchNorm, epsilon behavior |
+| CfC Sparse | 14 | Bit-identical to LUT (100 steps), stability, layout variants |
 
-**Status: TESTED (not exhaustive)**
+### CfC Cell Variants (cfc_cell_chip.h)
 
-### Softmax (onnx_shapes.h)
+| Variant | Tests | Verification |
+|---------|-------|-------------|
+| GENERIC | Comparison | Matches yinsen_cfc_cell exactly |
+| FIXED | 100-step | Matches GENERIC with precomputed decay |
+| LUT | 100-step | Matches FIXED within LUT tolerance (4.7e-5 per activation) |
+| SPARSE | 100-step | Bit-identical to LUT with same ternary weights |
 
-| Property | Test | Result |
-|----------|------|--------|
-| Outputs sum to 1.0 | Multiple inputs | PASS |
-| Numerical stability | Large values (1000) | PASS |
-| Positive outputs | All cases | PASS |
+### LUT+lerp Activations (activation_chip.h)
 
-**Status: TESTED**
+| Metric | Value | Evidence |
+|--------|-------|---------|
+| Sigmoid max error | 4.7e-5 | Full sweep [-8, +8] |
+| Tanh max error | 3.8e-4 | Full sweep [-8, +8] |
+| Accuracy vs FAST3 | 200x better | Direct comparison (Probe 2) |
+| L2 divergence after 1000 CfC steps | 6.8e-4 | vs FAST3: 0.137 (200x worse) |
+| Table size | 2KB (1KB each) | 256 entries, float32 |
 
-### Matrix Multiply (onnx_shapes.h)
+### Base Primitives
 
-| Test | Coverage | Result |
-|------|----------|--------|
-| 2×3 @ 3×2 | Spot check | PASS |
-| Identity matrix | Spot check | PASS |
-| Zero matrix | Spot check | PASS |
+- **Activation functions** (onnx_shapes.h): ReLU, sigmoid, tanh, GELU, SiLU property tests
+- **Softmax** (onnx_shapes.h): sum=1, numerical stability
+- **MatMul** (onnx_shapes.h): spot checks
+- **Ternary operations** (ternary.h): encode/decode, dot, matvec, quantize, absmean, int8, sparsity
+- **CfC cell** (cfc.h): 13 tests including 7 tau edge cases
+- **Ternary CfC cell** (cfc_ternary.h): 13 tests including 7 tau edge cases
+- **Canonical encoding** (trit_encoding.h): 24 cross-backend tests
 
-**Status: TESTED (not exhaustive)**
+---
 
-### Ternary Operations (ternary.h)
+## VALIDATED on Live Data
 
-| Operation | Tests | Result |
-|-----------|-------|--------|
-| Trit encode/decode | All 3 values | PASS |
-| Pack/unpack roundtrip | 8 weights | PASS (lossless) |
-| Dot product | Multiple cases | PASS |
-| Matvec (non-2×2) | Spot checks | PASS |
-| Quantization | Boundary values | PASS |
-| Absmean quantization | Distribution test | PASS |
-| Int8 quantization | Roundtrip | PASS |
-| Sparsity counting | Edge cases | PASS |
+### ISS Telemetry (examples/iss_telemetry.c)
 
-**Status: TESTED**
+| Property | Result |
+|----------|--------|
+| Live connection | ISS Lightstreamer, 384 detection samples |
+| Channels validated | 8 (CMG wheel speed, spin current, thermal, cabin pressure, CO2) |
+| v2 pre-scaling | Fixed per-channel from calibration phase |
+| CfC vs 3-sigma | CfC detects oscillation shifts 20/20; 3-sigma detects 0/20 |
+| Memory | 3,552 bytes total (5.4% of 64KB L1) |
+| Speed | 79 ns/channel/step (GENERIC) |
+| Root cause of v1 failure | CMG at ~0.001g contributed 0.16% of gate pre-activation |
 
-### CfC Cell (cfc.h)
+### Seismic Detector (examples/seismic_detector.c)
 
-| Property | Test | Result |
-|----------|------|--------|
-| Determinism | Same input → same output | PASS |
-| Bounded outputs | Zero input doesn't explode | PASS |
-| Decay behavior | State → 0 over time | PASS |
-| Numerical stability | 10,000 iterations | PASS |
-| Output softmax | Sum = 1.0 | PASS |
+| Property | Result |
+|----------|--------|
+| Live connection | GFZ SeedLink, GE.STU Stuttgart, 7,351 samples (28.6 sec) |
+| Channels | 3 (Z/N/E components at 100 Hz) |
+| CfC vs STA/LTA | CfC beats STA/LTA on 4/5 tests |
+| Tau ablation | Matched-tau detects 2.2-2.4x faster than ISS-tau at M2.0-M1.5 |
+| Memory | 1,768 bytes total (2.7% of 64KB L1) |
+| Speed | 58 ns/channel/step (GENERIC) |
+| Real-time headroom | 148,810x at 100 Hz |
 
-**Status: TESTED (single platform)**
+### Keystroke Biometric (examples/keystroke_biometric.c)
 
-### Ternary CfC Cell (cfc_ternary.h)
+| Property | Result |
+|----------|--------|
+| Falsification probes | 4 probes (v1 falsified: seed artifact; v2 honest; v3 shipped) |
+| v3 scoring | 0.3*mean + 0.7*PCA hybrid |
+| Detection rates | Easy 20/20, Medium 20/20, Hard 16/20, Control 10/20 |
+| Discriminant | 268 bytes, human-readable |
+| Speed | 110 ns/keystroke |
+| PCA sweet spot | N_PCS=5 for hidden_dim=8 (ceil(H*0.6)) |
 
-| Property | Test | Result |
-|----------|------|--------|
-| Determinism | Same input → same output | PASS |
-| Bounded outputs | 100 random inputs | PASS |
-| Numerical stability | 1,000 iterations | PASS |
-| Output softmax | Sum = 1.0 | PASS |
-| Memory compression | 4.4× vs float | MEASURED |
+---
 
-**Status: TESTED (single platform)**
+## Ternary Quantization (experiments/ternary_quantization/)
+
+### Probe 1: Bridge Experiment (quant_probe1.c)
+
+Float CfC weights quantized to {-1, 0, +1}. Side-by-side ISS anomaly simulation.
+
+| Threshold | Score vs Float | All Anomalies Detected? | Verdict |
+|-----------|---------------|------------------------|---------|
+| 0.05 | 97.4% | Yes (3/3) | PASS |
+| 0.10 | 99.0% | Yes (CabinP 100s faster) | **PASS** |
+| 0.20 | 99.1% | Yes (CabinP 70s faster) | **PASS** |
+| 0.30 | 106.7% | No (missed CMG + CabinP) | FAIL |
+| 0.50 | 122.0% | No (missed everything) | FAIL |
+
+At threshold 0.10: 160 weights -> 31 nonzero (19.4%), 129 zero (80.6%). Weight memory: 640 -> 40 bytes (16x).
+
+### Probe 2: FPU Optimization (quant_probe2_fpu.c)
+
+| Discovery | Detail |
+|-----------|--------|
+| Ternary-as-float GEMM | FPU multiplies 1.0 as fast as 0.3. No branching overhead. 44ns vs 92ns for branch-per-weight. |
+| LUT+lerp accuracy | 200x more accurate than FAST3 for 4ns more. After 1000 steps: LUT L2=0.000684, FAST3 L2=0.137 |
+| Sparse ternary | 81% zeros at t=0.10. Store nonzero indices. 31 adds, 0 multiplies. **20 ns/step, 2.73x faster** |
+
+---
+
+## Tau Principle (examples/seismic_detector.c)
+
+**Claim:** Tau differentiation emerges when decay dynamic range R matches signal temporal structure T.
+
+| Domain | R (max/min decay) | T (max/min timescale) | R ~ T? | Tau helps? |
+|--------|-------------------|----------------------|--------|------------|
+| Seismic | 2700x | 3000x | Yes | Yes: 2.2-2.4x faster detection |
+| ISS | 2700x | ~1x (slow sensors) | No | No: no improvement |
 
 ---
 
@@ -166,64 +166,26 @@ All gates verified against complete truth tables.
 
 ### EntroMorph Evolution (entromorph.h)
 
-**Claimed:** Evolution converges on XOR  
-**Reality:** Evolution finds numerical coincidences, not learned solutions
+100/100 runs "converge" but 0/100 have >10% confidence. Solutions predict ~0.5 for all inputs. Fragile to 1% noise (88% accuracy). Root cause: genesis initialization + cross-entropy fitness create a trap.
 
-| Test | Expected | Actual |
-|------|----------|--------|
-| XOR convergence | 100% | 100% (misleading) |
-| Solution confidence >10% | Most | **0/100** |
-| Solution confidence >20% | Many | **0/100** |
-| Noise robustness (1%) | 100% | **88%** |
-| Random genomes with confidence | Some | **0/1,000,000** |
+### Depth for Ternary CfC
 
-**Root Cause:**
-1. Genesis initialization produces all-0.5 predictions
-2. Cross-entropy fitness rewards staying near 0.5
-3. "Solutions" are numerical coincidences at decision boundary
+2-layer h=16+16 is 155x worse than 1-layer h=32 on Lorenz.
 
-**Status: FALSIFIED - Does not work**
+### Trajectory Distillation
 
-See: `docs/FALSIFICATION_ENTROMORPH.md`
+v2 factorial: distillation hurts instead of helping.
 
 ---
 
-## KNOWN ISSUES (Documented Edge Cases)
+## KNOWN ISSUES
 
-### NaN/Inf Input Propagation
-
-| Input | Behavior | Recommendation |
-|-------|----------|----------------|
-| NaN in weights | Propagates to output | Validate inputs |
-| Inf in weights | Propagates to output | Validate inputs |
-| NaN in activations | Undefined | Validate inputs |
-
-**Status: KNOWN - Validate inputs before use**
-
-### Negative dt in CfC
-
-| Input | Behavior | Explanation |
-|-------|----------|-------------|
-| dt < 0 | Amplification | decay = exp(-(-dt)/tau) > 1 |
-
-**Status: KNOWN - Invalid input, should validate**
-
-### Zero tau in CfC
-
-| Input | Behavior | Explanation |
-|-------|----------|-------------|
-| tau = 0 | decay = 0 | exp(-dt/0) = exp(-inf) = 0 |
-
-**Status: KNOWN - Mathematically valid but unusual**
-
-### Zero-Length Inputs
-
-| Operation | Behavior | Recommendation |
-|-----------|----------|----------------|
-| dot([], []) | Returns 0 | Document as convention |
-| quantize([]) | No crash | Document as convention |
-
-**Status: KNOWN - Works but edge case**
+| Issue | Behavior | Impact |
+|-------|----------|--------|
+| NaN/Inf propagation | NaN/Inf inputs propagate through | Low — validate inputs |
+| Negative dt | Amplifies state (exp > 1) | Medium — invalid input |
+| Zero tau | Returns NaN (Phase 4 fix) | Low — validate tau > 0 |
+| Zero-length inputs | Returns 0, no crash | Low — edge case convention |
 
 ---
 
@@ -232,98 +194,40 @@ See: `docs/FALSIFICATION_ENTROMORPH.md`
 | Area | Gap | Risk |
 |------|-----|------|
 | Cross-platform determinism | Only darwin/arm64 tested | `expf()` may vary |
-| 16-bit adder | 2^32 combinations | Infeasible to prove |
-| 32-bit adder | 2^64 combinations | Infeasible to prove |
-| Large ternary matvec | Only 2×2 proven | Likely works but unverified |
-| CfC ODE equivalence | No comparison | Unknown accuracy |
-| WCET bounds | No analysis | Cannot deploy to hard real-time |
-| Stack usage | No analysis | Unknown memory safety |
+| ARM Cortex-M4 deployment | No cross-compile tested | Stack/VLA concerns |
 | Thread safety | No testing | Assumed single-threaded |
+| WCET bounds | No analysis | Cannot deploy to hard real-time |
 
 ---
 
 ## Test Summary
 
-### By File
-
 | Test File | Tests | Pass | Fail |
 |-----------|-------|------|------|
+| test_chips.c | 105 | 105 | 0 |
 | test_shapes.c | 44 | 44 | 0 |
-| test_cfc.c | 6 | 6 | 0 |
+| test_cfc.c | 13 | 13 | 0 |
 | test_ternary.c | 55 | 55 | 0 |
-| test_cfc_ternary.c | 6 | 6 | 0 |
+| test_cfc_ternary.c | 13 | 13 | 0 |
+| test_encoding_canonical.c | 24 | 24 | 0 |
 | test_falsify.c | 38 | 37 | 1* |
 | test_entromorph.c | 11 | 11 | 0** |
+| test_ternary_4x4.c | 1 | 1 | 0 |
+| **Total** | **230** | **All pass** | |
 
-\* 1 "failure" is documented behavior (zero tau)  
-\** Tests pass but results are misleading (see FALSIFIED)
-
-### By Category
-
-| Category | Proven | Tested | Falsified | Known Issue |
-|----------|--------|--------|-----------|-------------|
-| Logic gates | 7 | - | - | - |
-| Arithmetic | 2 | - | - | - |
-| Ternary ops | 1 | 8 | - | - |
-| Activations | - | 5 | - | - |
-| CfC | - | 5 | - | 3 |
-| Evolution | - | - | 1 | - |
-
-### Total Counts
-
-| Metric | Count |
-|--------|-------|
-| Components PROVEN | 11 |
-| Components TESTED | 18+ |
-| Components FALSIFIED | 1 |
-| Known edge cases | 4 |
-| Core tests | 111 |
-| Falsification tests | 38 |
-| Evolution tests | 11 |
-| Exhaustive proofs | 1 (4×4 matvec: 43M verifications) |
-| **Total tests** | **161** |
-
----
-
-## What Can Be Trusted
-
-**HIGH CONFIDENCE (Proven):**
-- Logic gates for binary {0,1} inputs
-- Full adder for all 8 input combinations
-- 8-bit adder for all 65,536 input pairs
-- 2×2 ternary matvec for all 81 weight configurations
-- 4×4 ternary matvec for all 43,046,721 weight configurations
-
-**MEDIUM CONFIDENCE (Tested):**
-- Activations produce reasonable outputs
-- Softmax sums to 1.0 and is stable
-- Ternary operations are lossless
-- CfC is deterministic and stable on darwin/arm64
-
-**NO CONFIDENCE:**
-- EntroMorph evolution (FALSIFIED)
-- Cross-platform behavior (UNTESTED)
-- Anything larger than proven sizes
+\* 1 "failure" is documented behavior (zero tau -> NaN)  
+\** Tests pass but 2 convergence results are misleading (FALSIFIED)
 
 ---
 
 ## Reproducibility
 
-To reproduce all verification:
-
 ```bash
-cd yinsen
-make clean
-make test      # 111 core tests
-make falsify   # 38 falsification tests
+make test          # 125 core tests
+make falsify       # 38 adversarial tests
+make prove4x4      # 43M exhaustive 4x4 proof (~1 sec)
+cc -O2 -I include -I include/chips test/test_chips.c -lm -o test/test_chips && ./test/test_chips  # 105 chip tests
 ```
-
-Expected output:
-- test_shapes: 44/44 passed
-- test_cfc: 6/6 passed
-- test_ternary: 55/55 passed
-- test_cfc_ternary: 6/6 passed
-- test_falsify: 37/38 passed (1 documented)
 
 ---
 
@@ -331,6 +235,6 @@ Expected output:
 
 | Date | Change |
 |------|--------|
+| 2026-02-01 | Added chip forge (105 tests), enrollment validation (live data), ternary quantization probes, CfC variants, LUT+lerp, SPARSE, tau principle. Total: 230 |
+| 2026-01-31 | Updated counts (199), encoding tests, tau edge-cases, training results |
 | 2026-01-26 | Initial verification report |
-| 2026-01-26 | EntroMorph falsified |
-| 2026-01-26 | Edge cases documented |

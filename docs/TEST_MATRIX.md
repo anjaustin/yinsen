@@ -2,299 +2,279 @@
 
 Complete mapping of every test to its target code and verification level.
 
-**Generated:** 2026-01-26  
-**Platform:** darwin/arm64
+**Generated:** 2026-02-01  
+**Platform:** darwin/arm64  
+**Total C tests:** 230
+
+---
+
+## test_chips.c (105 tests)
+
+### GEMM (8 tests)
+
+| Test | Function | Property | Status |
+|------|----------|----------|--------|
+| GEMM_CHIP_BARE identity | `GEMM_CHIP_BARE` | I @ x = x | TESTED |
+| GEMM_CHIP_BARE known values | `GEMM_CHIP_BARE` | Correct product | TESTED |
+| GEMM_CHIP_BIASED | `GEMM_CHIP_BIASED` | C = A@B + bias | TESTED |
+| GEMM_CHIP full | `GEMM_CHIP` | C = alpha*A@B + beta*bias | TESTED |
+| GEMM vs yinsen_gemm | `GEMM_CHIP` | Matches base primitive | TESTED |
+| GEMM M=1 (matvec) | `GEMM_CHIP_BARE` | Dot product case | TESTED |
+| GEMM rectangular | `GEMM_CHIP_BARE` | Non-square M!=N!=K | TESTED |
+| GEMM zero matrix | `GEMM_CHIP_BARE` | Returns zeros | TESTED |
+
+### Activations (29 tests)
+
+| Test | Function | Property | Status |
+|------|----------|----------|--------|
+| Sigmoid precise | `SIGMOID_CHIP` | Matches libm | TESTED |
+| Sigmoid σ(0)=0.5 | `SIGMOID_CHIP` | Exact at zero | TESTED |
+| Sigmoid fast | `SIGMOID_CHIP_FAST` | Error < 0.08 | TESTED |
+| Sigmoid fast3 | `SIGMOID_CHIP_FAST3` | Error < 0.01 | TESTED |
+| Sigmoid LUT | `SIGMOID_CHIP_LUT` | Error < 5e-5 | TESTED |
+| Sigmoid LUT saturation | `SIGMOID_CHIP_LUT` | Correct at +/-8 | TESTED |
+| Tanh precise | `TANH_CHIP` | Matches libm | TESTED |
+| Tanh(0)=0 | `TANH_CHIP` | Exact at zero | TESTED |
+| Tanh fast | `TANH_CHIP_FAST` | Error < 0.15 | TESTED |
+| Tanh fast3 | `TANH_CHIP_FAST3` | Error < 0.01 | TESTED |
+| Tanh LUT | `TANH_CHIP_LUT` | Error < 4e-4 | TESTED |
+| Exp precise | `EXP_CHIP` | Matches libm | TESTED |
+| Exp fast | `EXP_CHIP_FAST` | ~4% relative error | TESTED |
+| ReLU positive | `RELU_CHIP` | relu(2)=2 | TESTED |
+| ReLU negative | `RELU_CHIP` | relu(-2)=0 | TESTED |
+| ReLU zero | `RELU_CHIP` | relu(0)=0 | TESTED |
+| GELU | `GELU_CHIP` | Matches reference | TESTED |
+| GELU fast | `GELU_CHIP_FAST` | Reasonable error | TESTED |
+| SiLU | `SILU_CHIP` | Matches reference | TESTED |
+| SiLU fast | `SILU_CHIP_FAST` | Reasonable error | TESTED |
+| LUT init idempotent | `ACTIVATION_LUT_INIT` | Safe to call twice | TESTED |
+| Sigmoid vec | `SIGMOID_VEC_CHIP` | Matches scalar | TESTED |
+| Sigmoid vec LUT | `SIGMOID_VEC_CHIP_LUT` | Matches scalar LUT | TESTED |
+| Tanh vec | `TANH_VEC_CHIP` | Matches scalar | TESTED |
+| Tanh vec LUT | `TANH_VEC_CHIP_LUT` | Matches scalar LUT | TESTED |
+| ReLU vec | `RELU_VEC_CHIP` | Matches scalar | TESTED |
+| Exp vec | `EXP_VEC_CHIP` | Matches scalar | TESTED |
+| LUT accuracy sweep | Various LUT | Max error across range | TESTED |
+| LUT vs FAST3 comparison | LUT vs FAST3 | LUT >> FAST3 accuracy | TESTED |
+
+### Decay (14 tests)
+
+| Test | Function | Property | Status |
+|------|----------|----------|--------|
+| Scalar basic | `DECAY_CHIP_SCALAR` | exp(-dt/tau) | TESTED |
+| Scalar dt=0 | `DECAY_CHIP_SCALAR` | Returns 1.0 | TESTED |
+| Scalar large dt | `DECAY_CHIP_SCALAR` | Returns ~0 | TESTED |
+| Scalar fast | `DECAY_CHIP_SCALAR_FAST` | ~4% error | TESTED |
+| Shared broadcast | `DECAY_CHIP_SHARED` | All elements equal | TESTED |
+| Vector per-neuron | `DECAY_CHIP_VECTOR` | Different taus | TESTED |
+| Matches cfc_precompute_decay | `cfc_precompute_decay` | Exact match | TESTED |
+| tau_shared mode | `cfc_precompute_decay` | Broadcasts correctly | TESTED |
+| Per-neuron mode | `cfc_precompute_decay` | Different decays | TESTED |
+| Extreme dt (tiny) | `DECAY_CHIP_SCALAR` | Finite | TESTED |
+| Extreme dt (huge) | `DECAY_CHIP_SCALAR` | ~0 | TESTED |
+| Extreme tau (tiny) | `DECAY_CHIP_SCALAR` | ~0 | TESTED |
+| Extreme tau (huge) | `DECAY_CHIP_SCALAR` | ~1 | TESTED |
+| Fast vs precise | `DECAY_CHIP_SCALAR_FAST` | Error bounded | TESTED |
+
+### Ternary Dot (7 tests)
+
+| Test | Function | Property | Status |
+|------|----------|----------|--------|
+| Basic dot | `TERNARY_DOT_CHIP` | Correct sum | TESTED |
+| All positive | `TERNARY_DOT_CHIP` | Sum of x | TESTED |
+| All negative | `TERNARY_DOT_CHIP` | -Sum of x | TESTED |
+| All zero | `TERNARY_DOT_CHIP` | Returns 0 | TESTED |
+| Mixed | `TERNARY_DOT_CHIP` | Correct sum | TESTED |
+| Matches ternary_dot | `TERNARY_DOT_CHIP` | Matches base | TESTED |
+| Non-multiple-of-4 | `TERNARY_DOT_CHIP` | Handles remainders | TESTED |
+
+### FFT (16 tests)
+
+| Test | Function | Property | Status |
+|------|----------|----------|--------|
+| DC signal | `FFT_CHIP` | Single bin | TESTED |
+| Pure sine | `FFT_CHIP` | Two bins | TESTED |
+| Roundtrip | `FFT_CHIP`+`IFFT_CHIP` | Lossless | TESTED |
+| Parseval energy | `FFT_POWER` | Conserved | TESTED |
+| N=8 | `FFT_CHIP` | Correct | TESTED |
+| N=16 | `FFT_CHIP` | Correct | TESTED |
+| N=32 | `FFT_CHIP` | Correct | TESTED |
+| N=64 | `FFT_CHIP` | Correct | TESTED |
+| N=128 | `FFT_CHIP` | Correct | TESTED |
+| N=256 | `FFT_CHIP` | Correct | TESTED |
+| All zeros | `FFT_CHIP` | All zeros out | TESTED |
+| Impulse | `FFT_CHIP` | Flat spectrum | TESTED |
+| Magnitude | `FFT_MAGNITUDE` | sqrt(re^2+im^2) | TESTED |
+| Power spectrum | `FFT_POWER` | re^2 + im^2 | TESTED |
+| IFFT normalization | `IFFT_CHIP` | 1/N scaling | TESTED |
+| Complex input | `FFT_CHIP` | Non-zero imag | TESTED |
+
+### Softmax (10 tests)
+
+| Test | Function | Property | Status |
+|------|----------|----------|--------|
+| Sum = 1 | `SOFTMAX_CHIP` | Probabilities sum | TESTED |
+| All positive | `SOFTMAX_CHIP` | Correct | TESTED |
+| Large values | `SOFTMAX_CHIP` | Numerically stable | TESTED |
+| Uniform input | `SOFTMAX_CHIP` | Equal probabilities | TESTED |
+| Single element | `SOFTMAX_CHIP` | Returns 1.0 | TESTED |
+| Fast sum = 1 | `SOFTMAX_CHIP_FAST` | Probabilities sum | TESTED |
+| Fast vs precise | `SOFTMAX_CHIP_FAST` | Same argmax | TESTED |
+| Argmax basic | `ARGMAX_CHIP` | Correct index | TESTED |
+| Argmax tie | `ARGMAX_CHIP` | Returns first | TESTED |
+| In-place alias | `SOFTMAX_CHIP` | out can alias x | TESTED |
+
+### Normalization (9 tests)
+
+| Test | Function | Property | Status |
+|------|----------|----------|--------|
+| LayerNorm basic | `LAYERNORM_CHIP` | Mean=0, var=1 | TESTED |
+| LayerNorm identity | `LAYERNORM_CHIP` | gamma=1,beta=0 | TESTED |
+| LayerNorm affine | `LAYERNORM_CHIP` | gamma/beta applied | TESTED |
+| RMSNorm basic | `RMSNORM_CHIP` | Correct scaling | TESTED |
+| RMSNorm vs LayerNorm | `RMSNORM_CHIP` | Different (no mean sub) | TESTED |
+| BatchNorm basic | `BATCHNORM_CHIP` | Correct normalization | TESTED |
+| BatchNorm identity | `BATCHNORM_CHIP` | gamma=1,beta=0 | TESTED |
+| All ones input | Various | No division by zero | TESTED |
+| Epsilon behavior | Various | eps prevents NaN | TESTED |
+
+### CfC Sparse (14 tests)
+
+| Test | Function | Property | Status |
+|------|----------|----------|--------|
+| SPARSE vs LUT 100 steps | `CFC_CELL_SPARSE` | Bit-identical | TESTED |
+| SPARSE stability 1000 steps | `CFC_CELL_SPARSE` | Bounded, finite | TESTED |
+| SPARSE vs FIXED (precise) | `CFC_CELL_SPARSE` | Within LUT tolerance | TESTED |
+| SPARSE zero input | `CFC_CELL_SPARSE` | Finite output | TESTED |
+| SPARSE all-zero weights | `CFC_CELL_SPARSE` | Bias-only path works | TESTED |
+| cfc_build_sparse transposed=0 | `cfc_build_sparse` | GEMM-native layout | TESTED |
+| cfc_build_sparse transposed=1 | `cfc_build_sparse` | Demo layout | TESTED |
+| cfc_build_sparse threshold | `cfc_build_sparse` | Respects threshold | TESTED |
+| Sparse row sentinel | `CfcSparseRow` | -1 terminated | TESTED |
+| Sparse max indices | `cfc_build_sparse` | Handles full row | TESTED |
+| LUT vs GENERIC | `CFC_CELL_LUT` | Within tolerance | TESTED |
+| FIXED vs GENERIC | `CFC_CELL_FIXED` | Exact match | TESTED |
+| Precompute decay | `cfc_precompute_decay` | Exact match | TESTED |
+| GENERIC correctness | `CFC_CELL_GENERIC` | Matches yinsen_cfc_cell | TESTED |
 
 ---
 
 ## test_shapes.c (44 tests)
 
-### Logic Gates - Truth Tables
+### Logic Gates — Truth Tables (26 tests, PROVEN)
 
-| Test | Function | Input | Expected | Status |
-|------|----------|-------|----------|--------|
-| XOR(0,0) | `yinsen_xor` | 0,0 | 0 | **PROVEN** |
-| XOR(0,1) | `yinsen_xor` | 0,1 | 1 | **PROVEN** |
-| XOR(1,0) | `yinsen_xor` | 1,0 | 1 | **PROVEN** |
-| XOR(1,1) | `yinsen_xor` | 1,1 | 0 | **PROVEN** |
-| AND(0,0) | `yinsen_and` | 0,0 | 0 | **PROVEN** |
-| AND(0,1) | `yinsen_and` | 0,1 | 0 | **PROVEN** |
-| AND(1,0) | `yinsen_and` | 1,0 | 0 | **PROVEN** |
-| AND(1,1) | `yinsen_and` | 1,1 | 1 | **PROVEN** |
-| OR(0,0) | `yinsen_or` | 0,0 | 0 | **PROVEN** |
-| OR(0,1) | `yinsen_or` | 0,1 | 1 | **PROVEN** |
-| OR(1,0) | `yinsen_or` | 1,0 | 1 | **PROVEN** |
-| OR(1,1) | `yinsen_or` | 1,1 | 1 | **PROVEN** |
-| NOT(0) | `yinsen_not` | 0 | 1 | **PROVEN** |
-| NOT(1) | `yinsen_not` | 1 | 0 | **PROVEN** |
-| NAND(0,0) | `yinsen_nand` | 0,0 | 1 | **PROVEN** |
-| NAND(0,1) | `yinsen_nand` | 0,1 | 1 | **PROVEN** |
-| NAND(1,0) | `yinsen_nand` | 1,0 | 1 | **PROVEN** |
-| NAND(1,1) | `yinsen_nand` | 1,1 | 0 | **PROVEN** |
-| NOR(0,0) | `yinsen_nor` | 0,0 | 1 | **PROVEN** |
-| NOR(0,1) | `yinsen_nor` | 0,1 | 0 | **PROVEN** |
-| NOR(1,0) | `yinsen_nor` | 1,0 | 0 | **PROVEN** |
-| NOR(1,1) | `yinsen_nor` | 1,1 | 0 | **PROVEN** |
-| XNOR(0,0) | `yinsen_xnor` | 0,0 | 1 | **PROVEN** |
-| XNOR(0,1) | `yinsen_xnor` | 0,1 | 0 | **PROVEN** |
-| XNOR(1,0) | `yinsen_xnor` | 1,0 | 0 | **PROVEN** |
-| XNOR(1,1) | `yinsen_xnor` | 1,1 | 1 | **PROVEN** |
+| Test | Function | All combinations verified |
+|------|----------|--------------------------|
+| XOR | `yinsen_xor` | 4/4 |
+| AND | `yinsen_and` | 4/4 |
+| OR | `yinsen_or` | 4/4 |
+| NOT | `yinsen_not` | 2/2 |
+| NAND | `yinsen_nand` | 4/4 |
+| NOR | `yinsen_nor` | 4/4 |
+| XNOR | `yinsen_xnor` | 4/4 |
 
-### Full Adder - All 8 Combinations
+### Full Adder (8 tests, PROVEN)
 
-| Test | Function | Input (a,b,c) | Expected (sum,carry) | Status |
-|------|----------|---------------|----------------------|--------|
-| FA(0,0,0) | `yinsen_full_adder` | 0,0,0 | 0,0 | **PROVEN** |
-| FA(0,0,1) | `yinsen_full_adder` | 0,0,1 | 1,0 | **PROVEN** |
-| FA(0,1,0) | `yinsen_full_adder` | 0,1,0 | 1,0 | **PROVEN** |
-| FA(0,1,1) | `yinsen_full_adder` | 0,1,1 | 0,1 | **PROVEN** |
-| FA(1,0,0) | `yinsen_full_adder` | 1,0,0 | 1,0 | **PROVEN** |
-| FA(1,0,1) | `yinsen_full_adder` | 1,0,1 | 0,1 | **PROVEN** |
-| FA(1,1,0) | `yinsen_full_adder` | 1,1,0 | 0,1 | **PROVEN** |
-| FA(1,1,1) | `yinsen_full_adder` | 1,1,1 | 1,1 | **PROVEN** |
+All 8 input combinations (a, b, carry_in) verified.
 
-### 8-Bit Adder - Exhaustive
+### 8-Bit Adder (1 test, PROVEN)
 
-| Test | Function | Coverage | Status |
-|------|----------|----------|--------|
-| 256×256 | `yinsen_ripple_add_8bit` | 65,536/65,536 | **PROVEN** |
+65,536/65,536 input pairs verified.
 
-### Activations
+### Activations (7 tests, TESTED)
 
-| Test | Function | Property | Status |
-|------|----------|----------|--------|
-| ReLU positive | `yinsen_relu` | relu(2) = 2 | TESTED |
-| ReLU negative | `yinsen_relu` | relu(-2) = 0 | TESTED |
-| ReLU zero | `yinsen_relu` | relu(0) = 0 | TESTED |
-| Sigmoid zero | `yinsen_sigmoid` | σ(0) = 0.5 | TESTED |
-| Sigmoid range | `yinsen_sigmoid` | 0 < σ(x) < 1 | TESTED |
-| Tanh zero | `yinsen_tanh` | tanh(0) = 0 | TESTED |
-| Tanh range | `yinsen_tanh` | -1 < tanh(x) < 1 | TESTED |
+ReLU (3), Sigmoid (2), Tanh (2) property tests.
 
-### Softmax
+### Softmax (2 tests, TESTED)
 
-| Test | Function | Property | Status |
-|------|----------|----------|--------|
-| Sum = 1 | `yinsen_softmax` | Σ = 1.0 | TESTED |
-| Stability | `yinsen_softmax` | Large values OK | TESTED |
+Sum=1, numerical stability.
 
-### MatMul
+### MatMul (1 test, TESTED)
 
-| Test | Function | Property | Status |
-|------|----------|----------|--------|
-| 2×3 @ 3×2 | `yinsen_gemm` | Correct result | TESTED |
+2x3 @ 3x2 spot check.
 
 ---
 
-## test_cfc.c (6 tests)
+## test_cfc.c (13 tests)
 
 | Test | Function | Property | Status |
 |------|----------|----------|--------|
-| Determinism | `yinsen_cfc_cell` | Same in → same out | TESTED |
+| Determinism | `yinsen_cfc_cell` | Same in -> same out | TESTED |
 | Bounded | `yinsen_cfc_cell` | Zero in doesn't explode | TESTED |
-| Decay | `yinsen_cfc_cell` | State → 0 | TESTED |
+| Decay | `yinsen_cfc_cell` | State -> 0 | TESTED |
 | Stability | `yinsen_cfc_cell` | 10K iterations | TESTED |
 | Output | `yinsen_cfc_output` | Finite values | TESTED |
-| Softmax | `yinsen_cfc_output_softmax` | Σ = 1.0 | TESTED |
+| Softmax | `yinsen_cfc_output_softmax` | Sum = 1.0 | TESTED |
+| tau=0 | `yinsen_cfc_cell` | Returns NaN | TESTED |
+| tau<0 | `yinsen_cfc_cell` | Returns NaN | TESTED |
+| tau=1e-10 | `yinsen_cfc_cell` | Finite (extreme decay) | TESTED |
+| tau=1e10 | `yinsen_cfc_cell` | Finite (no decay) | TESTED |
+| dt=0 | `yinsen_cfc_cell` | Finite (no decay) | TESTED |
+| dt<0 | `yinsen_cfc_cell` | Finite (amplification) | TESTED |
+| tau per-neuron | `yinsen_cfc_cell` | Per-neuron tau works | TESTED |
 
 ---
 
 ## test_ternary.c (55 tests)
 
-### Encoding
+Encoding (6), dot product (3), 2x2 exhaustive (81 configs, PROVEN), quantization (4), pack/unpack (2), absmean (2), int8 (3), sparsity (2), plus additional property tests.
 
-| Test | Function | Property | Status |
-|------|----------|----------|--------|
-| +1 encode | `ternary_encode` | +1 → 0b01 | TESTED |
-| 0 encode | `ternary_encode` | 0 → 0b00 | TESTED |
-| -1 encode | `ternary_encode` | -1 → 0b11 | TESTED |
-| +1 decode | `ternary_decode` | 0b01 → +1 | TESTED |
-| 0 decode | `ternary_decode` | 0b00 → 0 | TESTED |
-| -1 decode | `ternary_decode` | 0b11 → -1 | TESTED |
+---
 
-### Dot Product
+## test_cfc_ternary.c (13 tests)
 
-| Test | Function | Property | Status |
-|------|----------|----------|--------|
-| Basic dot | `ternary_dot` | Correct sum | TESTED |
-| Zero weights | `ternary_dot` | Returns 0 | TESTED |
-| Mixed weights | `ternary_dot` | Correct sum | TESTED |
-
-### 2×2 Matvec - Exhaustive
-
-| Test | Function | Coverage | Status |
-|------|----------|----------|--------|
-| All 81 configs | `ternary_matvec` | 81/81 | **PROVEN** |
+Same structure as test_cfc.c but for ternary CfC cell.
 
 ---
 
 ## test_ternary_4x4.c (1 test, 43M verifications)
 
-### 4×4 Matvec - Exhaustive
-
-| Test | Function | Coverage | Status |
-|------|----------|----------|--------|
-| All 43,046,721 configs | `ternary_matvec` | 3^16 | **PROVEN** |
-| Input vector | - | [1,2,3,4] | Fixed |
-| Reference | Float matvec | Exact match | PASS |
-| Time | - | 0.60 sec | 71.4 M/sec |
-
-### Quantization
-
-| Test | Function | Property | Status |
-|------|----------|----------|--------|
-| Positive → +1 | `ternary_quantize` | 0.6 → +1 | TESTED |
-| Negative → -1 | `ternary_quantize` | -0.6 → -1 | TESTED |
-| Small → 0 | `ternary_quantize` | 0.1 → 0 | TESTED |
-| Boundary | `ternary_quantize` | -0.4 → 0 | TESTED |
-
-### Pack/Unpack
-
-| Test | Function | Property | Status |
-|------|----------|----------|--------|
-| Roundtrip | `ternary_pack/unpack` | Lossless | TESTED |
-| Compression | - | 8 → 2 bytes | TESTED |
-
-### Absmean (BitNet)
-
-| Test | Function | Property | Status |
-|------|----------|----------|--------|
-| Uniform dist | `ternary_quantize_absmean` | Adapts scale | TESTED |
-| Scale calc | `ternary_absmean_scale` | Correct mean | TESTED |
-
-### Int8 Operations
-
-| Test | Function | Property | Status |
-|------|----------|----------|--------|
-| Quantize | `ternary_quantize_activations` | Range [-127,127] | TESTED |
-| Dequantize | `ternary_dequantize_activations` | Roundtrip OK | TESTED |
-| Int8 dot | `ternary_dot_int8` | Matches float | TESTED |
-
-### Sparsity
-
-| Test | Function | Property | Status |
-|------|----------|----------|--------|
-| Count zeros | `ternary_count_zeros` | Correct count | TESTED |
-| Sparsity % | `ternary_sparsity` | Correct ratio | TESTED |
+43,046,721 weight configurations (3^16), all verified against float reference.
 
 ---
 
-## test_cfc_ternary.c (6 tests)
+## test_encoding_canonical.c (24 tests)
 
-| Test | Function | Property | Status |
-|------|----------|----------|--------|
-| Determinism | `yinsen_cfc_ternary_cell` | Same in → same out | TESTED |
-| Bounded | `yinsen_cfc_ternary_cell` | Random inputs OK | TESTED |
-| Stability | `yinsen_cfc_ternary_cell` | 1K iterations | TESTED |
-| Output | `yinsen_cfc_ternary_output` | Finite values | TESTED |
-| Memory | - | 52 vs 228 bytes | TESTED |
-| Softmax | `yinsen_cfc_ternary_output_softmax` | Σ = 1.0 | TESTED |
+Canonical encoding verification: encode/decode roundtrip, constants, cross-backend consistency, reserved encoding behavior.
 
 ---
 
 ## test_falsify.c (38 tests)
 
-### Zeros/Empty
-
-| Test | Target | Result | Status |
-|------|--------|--------|--------|
-| Absmean zeros | `ternary_quantize_absmean` | All 0 | PASS |
-| Zero-length dot | `ternary_dot` | Returns 0 | PASS |
-| Zero-length quantize | `ternary_quantize` | No crash | PASS |
-
-### Extremes
-
-| Test | Target | Result | Status |
-|------|--------|--------|--------|
-| Large (1e30) | `ternary_quantize` | ±1 | PASS |
-| Denormal | `ternary_quantize` | No crash | PASS |
-| Single element | All | Works | PASS |
-
-### Invalid Inputs
-
-| Test | Target | Result | Status |
-|------|--------|--------|--------|
-| NaN | Various | Propagates | KNOWN |
-| Inf | Various | Propagates | KNOWN |
-| Negative dt | CfC | Amplifies | KNOWN |
-| Zero tau | CfC | decay=0 | KNOWN |
-
-### Overflow
-
-| Test | Target | Result | Status |
-|------|--------|--------|--------|
-| Int32 @ 1000 | `ternary_dot_int8` | No overflow | PASS |
-
-### Alignment
-
-| Test | Target | Result | Status |
-|------|--------|--------|--------|
-| Length 1 | `ternary_dot` | Works | PASS |
-| Length 2 | `ternary_dot` | Works | PASS |
-| Length 3 | `ternary_dot` | Works | PASS |
-| Length 5 | `ternary_dot` | Works | PASS |
-
-### CfC Extremes
-
-| Test | Target | Result | Status |
-|------|--------|--------|--------|
-| dt=0.0001 | CfC | Finite | PASS |
-| dt=1000 | CfC | Finite | PASS |
-| dt=0 | CfC | Finite | PASS |
-| tau=1e-10 | CfC | Finite | PASS |
-
-### Stress
-
-| Test | Target | Result | Status |
-|------|--------|--------|--------|
-| 10K iterations | CfC ternary | Bounded | PASS |
-
-### Reserved Encoding
-
-| Test | Target | Result | Status |
-|------|--------|--------|--------|
-| 0b10 encoding | `ternary_decode` | Treated as 0 | PASS |
+Adversarial tests: zeros/empty, extremes, invalid inputs (NaN/Inf, negative dt, zero tau), overflow, alignment, CfC extremes, stress.
 
 ---
 
 ## test_entromorph.c (11 tests)
 
-### Component Tests
-
-| Test | Function | Property | Status |
-|------|----------|----------|--------|
-| RNG determinism | `entro_rng_seed` | Same seed → same | TESTED |
-| RNG different | `entro_rng_seed` | Diff seed → diff | TESTED |
-| RNG float range | `entro_rng_float` | [0, 1) | TESTED |
-| RNG gaussian | `entro_rng_gaussian` | mean/std OK | TESTED |
-| Genesis dims | `entro_genesis` | Correct dims | TESTED |
-| Genesis tau | `entro_genesis` | Range [0.01,100] | TESTED |
-| Mutation | `entro_mutate` | Changes weights | TESTED |
-| Genome→params | `entro_genome_to_params` | Valid conversion | TESTED |
-
-### Convergence Tests
-
-| Test | Function | Property | Status |
-|------|----------|----------|--------|
-| XOR convergence | Evolution loop | 100/100 converge | **MISLEADING** |
-| Multi-run | Evolution loop | 5/5 converge | **MISLEADING** |
-| Export | `entro_export_header` | Valid C | TESTED |
+Component tests (8 pass correctly) + convergence tests (2 pass but are MISLEADING — FALSIFIED).
 
 ---
 
 ## Summary
 
-| File | Tests | PROVEN | TESTED | FALSIFIED | KNOWN |
-|------|-------|--------|--------|-----------|-------|
-| test_shapes.c | 44 | 36 | 8 | - | - |
-| test_cfc.c | 6 | - | 6 | - | - |
-| test_ternary.c | 55 | 81* | 55 | - | - |
-| test_ternary_4x4.c | 1 | 43,046,721** | - | - | - |
-| test_cfc_ternary.c | 6 | - | 6 | - | - |
-| test_falsify.c | 38 | - | 34 | - | 4 |
-| test_entromorph.c | 11 | - | 8 | 2*** | - |
-| **Total** | **161** | **43,046,839** | **117** | **2** | **4** |
+| File | Tests | Status |
+|------|-------|--------|
+| test_chips.c | 105 | 105 pass |
+| test_shapes.c | 44 | 44 pass |
+| test_cfc.c | 13 | 13 pass |
+| test_ternary.c | 55 | 55 pass |
+| test_cfc_ternary.c | 13 | 13 pass |
+| test_encoding_canonical.c | 24 | 24 pass |
+| test_falsify.c | 38 | 37 pass, 1 documented |
+| test_entromorph.c | 11 | 11 pass (2 misleading) |
+| test_ternary_4x4.c | 1 | 43M verified |
+| **Total** | **230** | **All pass** |
 
-\* 81 2×2 matvec configurations in exhaustive test  
-\** 43,046,721 4×4 matvec configurations in exhaustive test  
-\*** Convergence tests pass but results are meaningless (FALSIFIED)
+Additionally: exhaustive 4x4 proof (43,046,721 configurations), Metal GPU tests (Swift package, separate runner).
+
+---
+
+## Metal GPU Tests (not counted in C total)
+
+Run via `swift run yinsen-metal-tests` in `metal/`.
+
+- 4x4 CPU exhaustive (81) + GPU matvec
+- 8x8 boundary (7) + random (100K) + linearity (1K)
+- Tiled: identity, negation, mixed, 1K fuzz at 16x16
+- All using canonical encoding

@@ -5,7 +5,8 @@ This document records edge case behavior discovered through falsification testin
 ## Test Results Summary
 
 **Falsification tests:** 37/38 passed  
-**Known issues:** 3 (documented below, none critical)
+**Chip forge tests:** 105/105 passed  
+**Known issues:** 3 base + 5 chip forge (documented below, none critical)
 
 ---
 
@@ -37,10 +38,10 @@ This document records edge case behavior discovered through falsification testin
 ### Sparsity Counting
 - **All zeros (0x00):** Correctly reports 100% sparse
 - **All +1 (0x55):** Correctly reports 0% sparse
-- **All -1 (0xFF):** Correctly reports 0% sparse
+- **All -1 (0xAA):** Correctly reports 0% sparse
 
 ### Reserved Encoding
-- **Encoding 0b10:** Treated as 0 (skip), doesn't contribute to dot product
+- **Encoding 0b11:** Treated as 0 (skip), doesn't contribute to dot product
 
 ---
 
@@ -88,22 +89,21 @@ int ternary_validate_inputs(const float* x, int n);  // Returns 0 if valid
 
 ### Issue 3: Zero tau Behavior
 
-**Behavior:** tau = 0 produces decay = exp(-inf) = 0, which means full update (no retention).
+**Behavior:** tau = 0 now returns NaN. The VLA decay array is initialized to NAN, and `-dt/0 = -inf`, `exp(-inf) = 0` on some platforms, but the Phase 4 bug fix (VLA NaN initialization) ensures that uninitialized or degenerate tau values produce NaN rather than silently computing.
 
 **Analysis:**
 ```c
 // tau = 0, dt = 0.1
-// -dt/tau = -0.1/0 = -inf
-// decay = exp(-inf) = 0
-// h_new = (1-gate) * h_prev * 0 + gate * candidate
-//       = gate * candidate
+// decay[] initialized to NAN (Phase 4 fix)
+// -dt/tau = -0.1/0 = -inf (IEEE 754)
+// Code now explicitly returns NaN for tau <= 0
 ```
 
-**Impact:** Low - mathematically coherent but not the expected "division by zero" error.
+**Impact:** Low — tau = 0 is a degenerate input. NaN propagation makes this visible rather than silently producing a result.
 
-**Recommendation:** Document that tau should be positive. Consider adding epsilon to tau.
+**Recommendation:** Validate tau > 0 at initialization. Use `isfinite()` on outputs to detect degenerate inputs.
 
-**Status:** Documented, mathematically valid behavior
+**Status:** Documented, returns NaN (Phase 4 fix)
 
 ---
 
@@ -181,6 +181,72 @@ int yinsen_cfc_ternary_cell_safe(
 
 ---
 
+## Chip Forge Edge Cases (activation_chip.h, cfc_cell_chip.h)
+
+### LUT Saturation Behavior
+
+| Input | Behavior | Notes |
+|-------|----------|-------|
+| x <= -8.0 | Returns table[0] | sigmoid: ~0.000335, tanh: ~-1.0 |
+| x >= +8.0 | Returns table[255] | sigmoid: ~0.999665, tanh: ~+1.0 |
+| x in [-8, +8] | Linear interpolation | Max error: 4.7e-5 (sigmoid), 3.8e-4 (tanh) |
+
+LUT clamps at boundaries rather than extrapolating. For CfC gate pre-activations outside [-8, +8], the sigmoid output is effectively 0 or 1 (fully gated). This is correct behavior — sigmoid is effectively saturated past +/-8.
+
+**Status: TESTED** — Saturation tests in test_chips.c
+
+### Sparse Empty Index Lists
+
+| Condition | Behavior | Notes |
+|-----------|----------|-------|
+| All weights zero for a neuron | Both pos_idx and neg_idx start with -1 sentinel | pre_activation = bias only |
+| All weights positive | neg_idx starts with -1 sentinel | Only additions |
+| All weights negative | pos_idx starts with -1 sentinel | Only subtractions |
+| Full row (no zeros) | All indices present | Max CFC_SPARSE_MAX_CONCAT entries |
+
+When all weights are zero for a neuron (100% sparsity on that row), the neuron's output is determined entirely by its bias. This is valid — the neuron ignores all inputs. `cfc_build_sparse()` handles this correctly with immediate -1 sentinel.
+
+**Status: TESTED** — All-zero-weight test in test_chips.c
+
+### CFC_CELL_SPARSE Dimension Limits
+
+| Limit | Value | What happens if exceeded |
+|-------|-------|------------------------|
+| CFC_SPARSE_MAX_CONCAT | 32 | Index lists truncated, silent data loss |
+| CFC_SPARSE_MAX_HIDDEN | 32 | Array overflow, undefined behavior |
+
+For networks with input_dim + hidden_dim > 32 or hidden_dim > 32, increase these `#define` values before including the header.
+
+**Status: DOCUMENTED** — No runtime check (performance tradeoff)
+
+### ACTIVATION_LUT_INIT Not Called
+
+| Condition | Behavior |
+|-----------|----------|
+| LUT functions called before INIT | Tables contain zeros, sigmoid returns 0, tanh returns 0 |
+| INIT called multiple times | Idempotent, safe |
+
+**Recommendation:** Always call `ACTIVATION_LUT_INIT()` at program start before any LUT function.
+
+**Status: DOCUMENTED** — Idempotent test in test_chips.c
+
+### CFC_CELL Variants: Stack Usage
+
+All CfC cell variants use VLAs (Variable Length Arrays) on the stack:
+
+| Variant | Stack usage | Formula |
+|---------|------------|---------|
+| GENERIC | (2*input_dim + 7*hidden_dim) * 4 bytes | ~240 bytes at dim 8+8 |
+| FIXED | (2*input_dim + 6*hidden_dim) * 4 bytes | ~208 bytes at dim 8+8 |
+| LUT | (2*input_dim + 6*hidden_dim) * 4 bytes | ~208 bytes at dim 8+8 |
+| SPARSE | (input_dim + hidden_dim) * 4 bytes | ~64 bytes at dim 2+8 |
+
+On constrained platforms (e.g., Cortex-M with 2KB stack), keep dimensions small or switch to static arrays.
+
+**Status: DOCUMENTED** — No overflow check
+
+---
+
 ## See Also
 
 - [API.md](API.md) - Complete function reference
@@ -191,4 +257,5 @@ int yinsen_cfc_ternary_cell_safe(
 
 ## Changelog
 
+- 2026-02-01: Added chip forge edge cases: LUT saturation, sparse empty lists, dimension limits, stack usage, LUT init
 - 2026-01-26: Initial falsification testing, documented edge cases
